@@ -1,9 +1,16 @@
 name: Backend CI
 
 on:
+  # Le déclencheur sur pull_request est ce qui rend cette CI protectrice.
+  
+  pull_request:
+    branches: [main]
   push:
     branches:
       - main
+
+permissions:
+  contents: read
 
 jobs:
   ci:
@@ -31,6 +38,18 @@ jobs:
       - name: Check dependencies
         working-directory: backend
         run: npm ls
+
+      # ── Contrôles de la documentation ──
+      
+
+      - name: Valider la spécification OpenAPI
+        working-directory: backend
+        run: npm run docs:lint
+
+    
+      - name: Vérifier la cohérence documentation / routes
+        working-directory: backend
+        run: npm run docs:check
 
       - name: Build Docker image
         run: |

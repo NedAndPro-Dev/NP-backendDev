@@ -1,0 +1,25 @@
+# Configuration du linter OpenAPI — NetandPro Events
+#
+# Deux règles du jeu « recommended » sont écartées. Ce ne sont pas des
+# contournements de confort : chacune entrerait en conflit avec la
+# réalité de l'API, et une documentation qui ment pour satisfaire un
+# linter ne vaut rien.
+
+
+extends:
+  - recommended
+
+rules:
+  # ── Écartée : « toute opération doit déclarer une réponse 4XX » ──
+
+
+  operation-4xx-response: off
+
+  # ── Écartée : « aucun serveur ne doit pointer vers localhost » ──
+  #
+  # La règle vise les specs publiées avec une URL de développement
+  # oubliée. Ici, `http://localhost:5000/api` est intentionnel : c'est le
+  # serveur utilisé par la documentation en local, et le module de
+  # montage filtre la liste selon l'environnement — la production ne
+  # voit que son propre serveur.
+  no-server-example.com: off

@@ -1,0 +1,1816 @@
+openapi: 3.0.3
+
+info:
+  title: NetandPro Events — API Événements
+  version: 1.0.0
+  description: |
+    API REST de la plateforme de gestion d'événements NetandPro Events.
+
+    Documentation interne. L'accès est restreint hors environnement local.
+
+    ## Authentification
+
+    Les opérations marquées d'un cadenas exigent un jeton JWT dans
+    l'en-tête `Authorization: Bearer <token>`, obtenu via
+    `POST /auth/login`. Durée de vie par défaut : 24 heures.
+
+    Cliquez sur **Authorize** en haut à droite pour renseigner le jeton
+    une fois ; il sera réutilisé pour toutes les requêtes d'essai.
+
+    ## Deux formes d'erreur
+
+    L'API n'a pas de format d'erreur unifié. Les contrôleurs
+    d'authentification renvoient `{ success, message }`, ceux des
+    événements renvoient `{ message }` seul. Les deux formes sont
+    documentées telles quelles : un client doit gérer les deux.
+
+    ## Limitation de débit
+
+    Certaines opérations sont limitées par adresse IP. Les en-têtes
+    `RateLimit-Limit`, `RateLimit-Remaining` et `RateLimit-Reset`
+    accompagnent alors la réponse.
+  contact:
+    name: NetandPro Events
+    url: https://www.netandproevents.com
+    email: contact@netandproevents.com
+  license:
+    name: Propriétaire — NetandPro Systems
+    url: https://www.netandprosystems.com
+
+x-authors:
+  - name: Ing Ramses Fouda
+    email: ramses.fouda@netandproevents.com
+  - name: Felix TANZI
+    email: tanzifelix@gmail.com
+
+# Aucune authentification n'est requise par défaut. Les opérations
+# protégées le déclarent explicitement via `security: [bearerAuth]`.
+security: []
+
+servers:
+  - url: http://localhost:5000/api
+    description: Développement local
+    x-environment: development
+
+  - url: https://staging.netandproevents.com/api
+    description: Préproduction (staging)
+    x-environment: staging
+
+  - url: https://api.netandproevents.com/api
+    description: Production
+    x-environment: production
+
+tags:
+  - name: Santé
+    description: Sonde de disponibilité du service.
+
+  - name: Authentification
+    description: |
+      Connexion administrateur et gestion du mot de passe.
+
+      Le mot de passe expire au bout de 3 mois. Passé ce délai, la
+      connexion est refusée et aucun jeton n'est délivré.
+
+  - name: Événements — public
+    description: |
+      Opérations ouvertes aux visiteurs du site : consultation du
+      calendrier et soumission d'une demande.
+
+  - name: Événements — admin
+    description: |
+      Gestion complète des dossiers, réservée aux administrateurs
+      authentifiés.
+
+  - name: Lieux
+    description: |
+      Référentiel hiérarchique à deux niveaux : des établissements, et
+      les salles qu'ils contiennent. Alimente les listes déroulantes des
+      formulaires. Consultation seule — aucune écriture n'est exposée.
+
+  - name: Témoignages
+    description: |
+      Avis clients affichés sur la page d'accueil. Les témoignages de
+      plus de 3 mois sont purgés automatiquement au démarrage du serveur
+      puis toutes les 24 heures.
+
+  - name: Statistiques
+    description: Agrégats alimentant le tableau de bord d'administration.
+
+  - name: Contact
+    description: |
+      Formulaire de contact du site public et diagnostic de la
+      configuration email.
+
+paths:
+
+  # ─────────────────────────────── SANTÉ ───────────────────────────────
+
+  /health:
+    get:
+      tags: [Santé]
+      summary: Sonde de disponibilité
+      description: |
+        Vérifie que le processus Node répond aux requêtes.
+
+        Cette sonde ne teste pas la connexion à la base de données :
+        elle renvoie `200` même si MySQL est injoignable.
+      operationId: getHealth
+      responses:
+        '200':
+          description: Service opérationnel
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: OK
+                  message:
+                    type: string
+                    example: Backend NetandPro opérationnel
+              example:
+                status: OK
+                message: Backend NetandPro opérationnel
+
+  # ─────────────────────────── AUTHENTIFICATION ────────────────────────
+
+  /auth/login:
+    post:
+      tags: [Authentification]
+      summary: Ouvrir une session administrateur
+      description: |
+        Vérifie les identifiants et renvoie un jeton JWT valable 24 heures.
+
+        **Limitation** : 10 tentatives par tranche de 15 minutes et par
+        adresse IP.
+
+        **Mot de passe expiré** : si les identifiants sont corrects mais
+        que la date d'expiration est dépassée, la réponse est un `403`
+        contenant `passwordExpired: true`, sans jeton. Le changement de
+        mot de passe exigeant un jeton valide, le compte ne peut alors
+        plus être débloqué depuis l'interface.
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+            example:
+              email: admin@netandproevents.com
+              password: MonMotDePasse123
+      responses:
+        '200':
+          description: Session ouverte
+          headers:
+            RateLimit-Limit:
+              $ref: '#/components/headers/RateLimitLimit'
+            RateLimit-Remaining:
+              $ref: '#/components/headers/RateLimitRemaining'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+              example:
+                success: true
+                message: Connexion réussie
+                token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6MSwiZW1haWwiOiJhZG1pbiJ9.signature
+                user:
+                  id: 1
+                  email: admin@netandproevents.com
+                  passwordExpiration: '2026-10-23'
+        '400':
+          description: Email ou mot de passe absent du corps de requête
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                success: false
+                message: Email et mot de passe requis
+        '401':
+          description: |
+            Identifiants incorrects.
+
+            Le message est volontairement identique que l'email soit
+            inconnu ou le mot de passe erroné : distinguer les deux cas
+            permettrait d'énumérer les comptes existants.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                success: false
+                message: Identifiants incorrects
+        '403':
+          description: Mot de passe expiré — aucun jeton n'est délivré
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PasswordExpiredError'
+              example:
+                success: false
+                passwordExpired: true
+                message: Votre mot de passe a expiré. Veuillez le changer.
+        '429':
+          $ref: '#/components/responses/LoginRateLimited'
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/change-password:
+    post:
+      tags: [Authentification]
+      summary: Changer son mot de passe
+      description: |
+        Remplace le mot de passe du compte authentifié et repousse la date
+        d'expiration de 3 mois.
+
+        Le nouveau mot de passe doit faire au moins 8 caractères. Aucune
+        autre règle de complexité n'est appliquée côté serveur.
+
+        Le hachage utilise bcrypt avec un facteur de coût de 10.
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChangePasswordRequest'
+            example:
+              currentPassword: MonMotDePasse123
+              newPassword: UnNouveauMotDePasse456
+      responses:
+        '200':
+          description: Mot de passe modifié
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: 'Mot de passe modifié avec succès. Nouvelle expiration : 3 mois.'
+        '400':
+          description: Champ manquant, ou nouveau mot de passe trop court
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                champManquant:
+                  summary: Un des deux champs est absent
+                  value:
+                    success: false
+                    message: Ancien et nouveau mot de passe requis
+                tropCourt:
+                  summary: Moins de 8 caractères
+                  value:
+                    success: false
+                    message: Le nouveau mot de passe doit contenir au moins 8 caractères
+        '401':
+          description: |
+            Jeton absent ou invalide, **ou** mot de passe actuel incorrect.
+
+            Les deux cas partagent le même code de statut mais pas le même
+            message.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                motDePasseActuelIncorrect:
+                  summary: Le mot de passe actuel ne correspond pas
+                  value:
+                    success: false
+                    message: Mot de passe actuel incorrect
+                jetonManquant:
+                  summary: En-tête Authorization absent
+                  value:
+                    success: false
+                    message: Token manquant ou invalide
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /auth/verify:
+    get:
+      tags: [Authentification]
+      summary: Vérifier la session en cours
+      description: |
+        Valide le jeton et renvoie le compte associé. Le frontend appelle
+        cette opération au chargement pour restaurer la session.
+
+        Cette vérification ne contrôle **pas** l'expiration du mot de
+        passe : une session ouverte avant la date d'expiration reste
+        valide au-delà, jusqu'à l'expiration du jeton lui-même.
+      operationId: verifySession
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Session valide
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  user:
+                    $ref: '#/components/schemas/User'
+              example:
+                success: true
+                user:
+                  id: 1
+                  email: admin@netandproevents.com
+                  passwordExpiration: '2026-10-23'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            Compte supprimé alors que son jeton est encore valide. Le
+            jeton reste cryptographiquement correct mais ne correspond
+            plus à aucun utilisateur.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                success: false
+                message: Utilisateur non trouvé
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  # ──────────────────────────── ÉVÉNEMENTS ─────────────────────────────
+
+  /events/public:
+    get:
+      tags: [Événements — public]
+      summary: Lister les événements du calendrier public
+      description: |
+        Renvoie les événements dont le statut n'est pas `Annulé`, triés
+        par date de début croissante. Alimente le calendrier de la page
+        d'accueil.
+
+        La projection est réduite : ni email, ni téléphone, ni montant.
+        Elle inclut en revanche `client_name` en clair, sans
+        authentification.
+      operationId: getPublicEvents
+      responses:
+        '200':
+          description: Liste des événements visibles publiquement
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PublicEvent'
+              example:
+                - id: 12
+                  client_name: Société Alpha SARL
+                  date_start: '2026-09-14T08:00:00.000Z'
+                  date_end: '2026-09-14T18:00:00.000Z'
+                  status: Confirmé
+                  location_name: Hilton Yaoundé - Bouma A
+                - id: 13
+                  client_name: Ministère de la Santé
+                  date_start: '2026-10-02T09:00:00.000Z'
+                  date_end: '2026-10-03T17:00:00.000Z'
+                  status: En attente
+                  location_name: Palais des Congrès de Yaoundé - Grande salle de conférence
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /events:
+    post:
+      tags: [Événements — public]
+      summary: Soumettre une demande d'événement
+      description: |
+        Crée un dossier au statut `En attente` depuis le formulaire
+        « Planifier ». Ouvert sans authentification.
+
+        **Aucune validation applicative.** Le contrôleur transmet le corps
+        de requête directement au modèle. Les champs marqués requis
+        ci-dessous le sont au niveau du schéma MySQL : leur absence
+        produit une **500**, jamais une 400. Un `locationId` inexistant ou
+        un `paymentMethod` hors énumération produisent le même 500.
+
+        Le champ `services` est stocké en colonne JSON. Toute valeur qui
+        n'est pas un tableau est silencieusement remplacée par un tableau
+        vide — sans erreur ni avertissement.
+      operationId: createEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventInput'
+            example:
+              clientName: Société Alpha SARL
+              clientEmail: contact@alpha.cm
+              clientPhone: '+237698200792'
+              companyName: Alpha SARL
+              dateStart: '2026-09-14T08:00'
+              dateEnd: '2026-09-14T18:00'
+              locationId: 2
+              services:
+                - Sonorisation
+                - Traduction simultanée
+                - Interprètes (2 langues)
+              paymentMethod: MTN Mobile Money
+              notes: "NUI : M0123456789\nAdresse : Bastos, Yaoundé\nContact : Jean Mba"
+              conditionsAccepted: true
+      responses:
+        '201':
+          description: Dossier créé au statut « En attente »
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Événement créé avec succès
+                  eventId:
+                    type: integer
+                    description: Identifiant du dossier créé
+                    example: 13
+              example:
+                success: true
+                message: Événement créé avec succès
+                eventId: 13
+        '500':
+          description: |
+            Erreur serveur. Englobe les violations de contrainte SQL :
+            champ requis absent, lieu inexistant, mode de paiement hors
+            énumération.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              example:
+                success: false
+                message: Erreur lors de la création de l'événement
+
+    get:
+      tags: [Événements — admin]
+      summary: Lister tous les événements
+      description: |
+        Renvoie l'intégralité des dossiers, tous statuts confondus, triés
+        par date de début décroissante. Le champ `services` est
+        désérialisé en tableau.
+
+        Aucune pagination ni filtrage côté serveur : la réponse grossit
+        linéairement avec la base, et le filtrage par statut ou par nom
+        se fait côté client.
+      operationId: getAllEvents
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Liste complète des dossiers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Event'
+              example:
+                - id: 12
+                  client_name: Société Alpha SARL
+                  client_email: contact@alpha.cm
+                  client_phone: '+237698200792'
+                  company_name: Alpha SARL
+                  date_start: '2026-09-14T08:00:00.000Z'
+                  date_end: '2026-09-14T18:00:00.000Z'
+                  location_id: 2
+                  location_name: Hilton Yaoundé - Bouma A
+                  services:
+                    - Sonorisation
+                    - Traduction simultanée
+                  payment_method: MTN Mobile Money
+                  conditions_accepted: 1
+                  status: Confirmé
+                  notes: "NUI : M0123456789"
+                  created_at: '2026-07-01T10:23:45.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /events/{id}:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+
+    get:
+      tags: [Événements — admin]
+      summary: Consulter un événement
+      description: |
+        Renvoie le dossier complet, lieu résolu et services désérialisés.
+
+        ⚠️ **Divergence connue avec `GET /events`.** La désérialisation du
+        champ `services` n'est ici appliquée que si la valeur remontée par
+        le pilote MySQL est une chaîne. Le listing gère en plus le cas où
+        elle est déjà un tableau, pas cette opération. Selon la façon dont
+        `mysql2` restitue la colonne JSON, `services` peut donc revenir
+        vide ici alors qu'il est correctement rempli dans le listing.
+        À vérifier en comparant les deux réponses pour un même dossier.
+      operationId: getEventById
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Dossier trouvé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Event'
+              example:
+                id: 12
+                client_name: Société Alpha SARL
+                client_email: contact@alpha.cm
+                client_phone: '+237698200792'
+                company_name: Alpha SARL
+                date_start: '2026-09-14T08:00:00.000Z'
+                date_end: '2026-09-14T18:00:00.000Z'
+                location_id: 2
+                location_name: Hilton Yaoundé - Bouma A
+                services:
+                  - Sonorisation
+                  - Traduction simultanée
+                payment_method: MTN Mobile Money
+                conditions_accepted: 1
+                status: Confirmé
+                notes: "NUI : M0123456789"
+                created_at: '2026-07-01T10:23:45.000Z'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+    put:
+      tags: [Événements — admin]
+      summary: Modifier un événement
+      description: |
+        Remplacement complet des champs métier. `status` et
+        `conditions_accepted` ne sont pas modifiables ici : utiliser
+        `PATCH /events/{id}/status` pour le statut.
+
+        **Sémantique de remplacement.** Tout champ omis est écrit tel
+        quel : `companyName` et `notes` deviennent `NULL`, les autres
+        déclenchent une erreur SQL puisqu'ils sont `NOT NULL`. Envoyer
+        systématiquement l'objet complet.
+
+        ⚠️ **Un 404 ne signifie pas toujours « introuvable ».** La
+        détection repose sur le nombre de lignes modifiées par MySQL.
+        Soumettre des valeurs identiques à celles déjà en base ne modifie
+        aucune ligne, et l'opération répond `404 Événement non trouvé`
+        alors que le dossier existe bel et bien.
+      operationId: updateEvent
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EventUpdateInput'
+            example:
+              clientName: Société Alpha SARL
+              clientEmail: contact@alpha.cm
+              clientPhone: '+237698200792'
+              companyName: Alpha SARL
+              dateStart: '2026-09-14T09:00'
+              dateEnd: '2026-09-14T19:00'
+              locationId: 3
+              services:
+                - Sonorisation
+                - Vidéoprojection
+              paymentMethod: Virement bancaire
+              notes: Horaires décalés d'une heure à la demande du client
+      responses:
+        '200':
+          description: Dossier mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: Événement mis à jour avec succès
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: |
+            Dossier introuvable, **ou** aucune valeur modifiée (voir la
+            description de l'opération).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorSimple'
+              example:
+                message: Événement non trouvé
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+    delete:
+      tags: [Événements — admin]
+      summary: Supprimer un événement
+      description: |
+        Suppression définitive de la ligne. Ni corbeille, ni archivage,
+        ni journalisation de l'auteur de l'action.
+      operationId: deleteEvent
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Dossier supprimé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: Événement supprimé
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/EventNotFound'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /events/{id}/status:
+    parameters:
+      - $ref: '#/components/parameters/EventId'
+
+    patch:
+      tags: [Événements — admin]
+      summary: Changer le statut d'un événement
+      description: |
+        Modifie le seul champ `status`. C'est l'opération déclenchée
+        depuis la liste d'administration.
+
+        Le statut n'est pas validé applicativement : une valeur hors
+        énumération provoque une **500** issue de MySQL, pas une 400.
+
+        ⚠️ Comme pour `PUT`, réappliquer le statut déjà en place ne
+        modifie aucune ligne et renvoie `404`.
+      operationId: updateEventStatus
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status:
+                  $ref: '#/components/schemas/EventStatus'
+            example:
+              status: Confirmé
+      responses:
+        '200':
+          description: Statut mis à jour
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: Statut mis à jour
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Dossier introuvable, **ou** statut inchangé
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiErrorSimple'
+              example:
+                message: Événement non trouvé
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  # ─────────────────────────────── LIEUX ───────────────────────────────
+
+  /locations:
+    get:
+      tags: [Lieux]
+      summary: Lister tous les lieux
+      description: |
+        Renvoie établissements et salles à plat, chacun accompagné d'un
+        champ `full_name` calculé par jointure : « Établissement - Salle »
+        pour une salle, le nom seul pour un établissement.
+
+        C'est cette opération qui alimente le sélecteur de lieu du
+        formulaire « Planifier ».
+      operationId: getAllLocations
+      responses:
+        '200':
+          description: Référentiel complet
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Location'
+              example:
+                - id: 1
+                  name: Hilton Yaoundé
+                  parent_id: null
+                  full_name: Hilton Yaoundé
+                - id: 2
+                  name: Bouma A
+                  parent_id: 1
+                  full_name: Hilton Yaoundé - Bouma A
+                - id: 3
+                  name: Bouma B
+                  parent_id: 1
+                  full_name: Hilton Yaoundé - Bouma B
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /locations/parents:
+    get:
+      tags: [Lieux]
+      summary: Lister les établissements
+      description: |
+        Lieux racines uniquement, c'est-à-dire sans parent, triés par nom.
+
+        Contrairement à `GET /locations`, la réponse ne comporte pas de
+        champ `full_name` mais expose `created_at`.
+      operationId: getParentLocations
+      responses:
+        '200':
+          description: Liste des établissements
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationBase'
+              example:
+                - id: 1
+                  name: Hilton Yaoundé
+                  parent_id: null
+                  created_at: '2026-01-15T09:00:00.000Z'
+                - id: 13
+                  name: Hôtel Mont Fébé
+                  parent_id: null
+                  created_at: '2026-01-15T09:00:00.000Z'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /locations/children/{parentId}:
+    get:
+      tags: [Lieux]
+      summary: Lister les salles d'un établissement
+      description: |
+        Renvoie les salles rattachées à l'établissement indiqué, triées
+        par nom.
+
+        Un identifiant inexistant produit un tableau vide accompagné d'un
+        `200`, et non un `404` : l'opération ne distingue pas
+        « établissement inconnu » de « établissement sans salle ».
+      operationId: getChildLocations
+      parameters:
+        - name: parentId
+          in: path
+          required: true
+          description: Identifiant de l'établissement parent
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+          example: 1
+      responses:
+        '200':
+          description: Salles rattachées, éventuellement aucune
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationBase'
+              example:
+                - id: 5
+                  name: Bete A
+                  parent_id: 1
+                  created_at: '2026-01-15T09:00:00.000Z'
+                - id: 2
+                  name: Bouma A
+                  parent_id: 1
+                  created_at: '2026-01-15T09:00:00.000Z'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  # ──────────────────────────── TÉMOIGNAGES ────────────────────────────
+
+  /testimonials:
+    post:
+      tags: [Témoignages]
+      summary: Déposer un témoignage
+      description: |
+        Enregistre un avis client depuis la page d'accueil. Ouvert sans
+        authentification.
+
+        Le commentaire doit compter au moins 10 caractères. Aucune
+        vérification que l'auteur est réellement client, aucune
+        modération avant publication, et aucune limitation de débit :
+        l'opération est ouverte au dépôt automatisé.
+      operationId: createTestimonial
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TestimonialInput'
+            example:
+              clientName: Jean Mba
+              comment: Organisation impeccable, équipe réactive du début à la fin.
+      responses:
+        '201':
+          description: Témoignage enregistré et immédiatement visible
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  testimonialId:
+                    type: integer
+              example:
+                success: true
+                message: Merci pour votre témoignage !
+                testimonialId: 3
+        '400':
+          description: Champ manquant ou commentaire trop court
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                champManquant:
+                  summary: Nom ou commentaire absent
+                  value:
+                    success: false
+                    message: Nom et commentaire requis
+                tropCourt:
+                  summary: Commentaire de moins de 10 caractères
+                  value:
+                    success: false
+                    message: Le commentaire doit contenir au moins 10 caractères
+        '500':
+          $ref: '#/components/responses/ServerError'
+
+  /testimonials/recent:
+    get:
+      tags: [Témoignages]
+      summary: Lister les témoignages des 3 derniers mois
+      description: |
+        Renvoie les avis déposés il y a moins de 3 mois, du plus récent au
+        plus ancien. Les plus anciens ayant été supprimés par la purge
+        automatique, cette opération reflète en pratique la table entière.
+      operationId: getRecentTestimonials
+      responses:
+        '200':
+          description: Témoignages récents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Testimonial'
+              example:
+                - id: 2
+                  client_name: Jean Mba
+                  comment: Organisation impeccable, équipe réactive du début à la fin.
+                  created_at: '2026-07-10T14:32:00.000Z'
+                - id: 1
+                  client_name: Marie Ngo
+                  comment: Sonorisation et traduction parfaitement gérées.
+                  created_at: '2026-06-28T08:15:00.000Z'
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  /testimonials/cleanup:
+    delete:
+      tags: [Témoignages]
+      summary: Purger les témoignages de plus de 3 mois
+      description: |
+        Supprime définitivement les avis vieux de plus de 3 mois et
+        renvoie le nombre de lignes effacées.
+
+        ⚠️ **Opération destructive exposée sans authentification.** Le
+        code la destine à un ordonnanceur, mais rien ne vérifie
+        l'appelant : toute personne connaissant l'URL peut la déclencher.
+
+        À noter qu'elle fait doublon : la même purge s'exécute déjà au
+        démarrage du serveur puis toutes les 24 heures, sans passer par
+        HTTP.
+      operationId: cleanOldTestimonials
+      responses:
+        '200':
+          description: Purge effectuée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: 0 témoignage(s) supprimé(s)
+        '500':
+          $ref: '#/components/responses/ServerErrorSimple'
+
+  # ──────────────────────────── STATISTIQUES ───────────────────────────
+
+  /stats:
+    get:
+      tags: [Statistiques]
+      summary: Consulter les agrégats du tableau de bord
+      description: |
+        Calcule le nombre total de dossiers, leur répartition par statut,
+        la volumétrie mensuelle de l'année civile en cours, et les 5
+        prestations les plus demandées.
+
+        Les statuts et les mois sans occurrence sont **absents** des
+        tableaux plutôt que présents avec un compteur à zéro : un client
+        doit gérer les trous.
+
+        Le classement des prestations est calculé en mémoire, en
+        parcourant tous les dossiers. Sans agrégation SQL, le coût croît
+        linéairement avec le volume.
+      operationId: getStats
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Agrégats calculés
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Stats'
+              example:
+                total: 12
+                byStatus:
+                  - status: En attente
+                    count: 5
+                  - status: Confirmé
+                    count: 6
+                  - status: Annulé
+                    count: 1
+                byMonth:
+                  - month: 7
+                    count: 3
+                  - month: 9
+                    count: 4
+                  - month: 10
+                    count: 2
+                topServices:
+                  - name: Sonorisation
+                    count: 9
+                  - name: Traduction simultanée
+                    count: 6
+                  - name: Vidéoprojection
+                    count: 4
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '500':
+          description: |
+            Erreur interne.
+
+            ⚠️ Cette réponse expose `error.message`, qui peut divulguer
+            des noms de colonnes et la structure des requêtes SQL.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  error:
+                    type: string
+              example:
+                message: Erreur serveur
+                error: "Unknown column 'date_start' in 'field list'"
+
+  # ────────────────────────────── CONTACT ──────────────────────────────
+
+  /email/contact:
+    post:
+      tags: [Contact]
+      summary: Envoyer un message via le formulaire de contact
+      description: |
+        Enregistre le message en base, puis envoie deux emails : une
+        notification à l'administrateur et un accusé de réception à
+        l'expéditeur.
+
+        **Limitation** : 10 requêtes par heure et par adresse IP.
+        Attention, le message d'erreur et les commentaires du code
+        annoncent 3 — c'est la constante qui fait foi, et elle vaut 10.
+
+        **Ordre des opérations.** L'enregistrement en base précède
+        l'envoi. Si le serveur SMTP échoue, le message est déjà persisté
+        mais l'appelant reçoit une `500` et croit l'envoi perdu ; un
+        nouvel essai crée alors un doublon en base.
+      operationId: sendContactMessage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ContactRequest'
+            example:
+              name: Jean Mba
+              email: jean.mba@exemple.cm
+              phone: '+237698200792'
+              subject: Demande de devis pour un séminaire
+              message: Bonjour, nous organisons un séminaire de 80 personnes en octobre.
+      responses:
+        '200':
+          description: Message enregistré et emails transmis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiSuccess'
+              example:
+                success: true
+                message: Message envoyé avec succès
+        '400':
+          description: Champ obligatoire manquant ou adresse email malformée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ApiError'
+              examples:
+                champManquant:
+                  summary: Un des champs obligatoires est absent
+                  value:
+                    success: false
+                    message: Tous les champs obligatoires doivent être remplis
+                emailInvalide:
+                  summary: L'adresse ne passe pas la validation
+                  value:
+                    success: false
+                    message: Format d'email invalide
+        '429':
+          description: Quota horaire dépassé pour cette adresse IP
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  retryAfter:
+                    type: string
+              example:
+                success: false
+                message: Trop de messages envoyés. Veuillez patienter avant de réessayer.
+                retryAfter: 1 heure
+        '500':
+          description: |
+            Échec de l'envoi. Le message reste enregistré en base.
+
+            ⚠️ La réponse expose `error.message`, susceptible de révéler
+            des détails de la configuration SMTP.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  error:
+                    type: string
+              example:
+                success: false
+                message: Erreur lors de l'envoi du message. Veuillez réessayer.
+                error: 'Invalid login: 535-5.7.8 Username and Password not accepted'
+
+  /email/test:
+    get:
+      tags: [Contact]
+      summary: Diagnostiquer la configuration email
+      description: |
+        Ouvre une connexion au serveur SMTP et rapporte si elle aboutit.
+
+        ⚠️ **Fuite d'information — opération publique.** La réponse
+        contient l'adresse Gmail émettrice, l'adresse de réception des
+        notifications et un indicateur précisant si le mot de passe
+        applicatif est renseigné. En cas d'échec, elle ajoute le message
+        d'erreur SMTP brut ainsi que les mêmes informations.
+
+        Utile en développement, à retirer ou protéger avant tout
+        déploiement.
+      operationId: testEmailConfig
+      responses:
+        '200':
+          description: Connexion SMTP établie
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  config:
+                    type: object
+                    properties:
+                      user:
+                        type: string
+                      service:
+                        type: string
+                      passwordSet:
+                        type: boolean
+                      receiveEmail:
+                        type: string
+              example:
+                success: true
+                message: Configuration email OK ✅
+                config:
+                  user: contact@netandproevents.com
+                  service: Gmail
+                  passwordSet: true
+                  receiveEmail: contact@netandproevents.com
+        '500':
+          description: Configuration invalide — la réponse détaille l'erreur
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  error:
+                    type: string
+                  details:
+                    type: object
+              example:
+                success: false
+                message: Erreur configuration email
+                error: Variables EMAIL_USER ou EMAIL_PASSWORD manquantes dans .env
+                details:
+                  user: NON DÉFINI
+                  passwordSet: false
+                  receiveEmail: NON DÉFINI
+
+# ═══════════════════════════════ COMPOSANTS ═══════════════════════════
+
+components:
+
+  # ── Schéma de sécurité ──
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Jeton JWT signé en HS256. Charge utile : `id`, `email`, `iat`,
+        `exp`.
+
+        À placer dans l'en-tête `Authorization: Bearer <token>`.
+
+  # ── Paramètres réutilisables ──
+
+  parameters:
+    EventId:
+      name: id
+      in: path
+      required: true
+      description: Identifiant numérique du dossier événement
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+      example: 12
+
+  # ── En-têtes réutilisables ──
+
+  headers:
+    RateLimitLimit:
+      description: Nombre maximal de requêtes autorisées dans la fenêtre
+      schema:
+        type: integer
+        example: 10
+
+    RateLimitRemaining:
+      description: Requêtes restantes dans la fenêtre courante
+      schema:
+        type: integer
+        example: 7
+
+    RateLimitReset:
+      description: Secondes restantes avant réinitialisation du compteur
+      schema:
+        type: integer
+        example: 840
+
+  # ── Réponses réutilisables ──
+
+  responses:
+    Unauthorized:
+      description: |
+        Jeton manquant, malformé ou expiré. Le middleware distingue trois
+        situations, avec un message différent pour chacune.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+          examples:
+            enTeteAbsent:
+              summary: En-tête Authorization absent ou sans préfixe Bearer
+              value:
+                success: false
+                message: Token manquant ou invalide
+            sessionExpiree:
+              summary: Jeton expiré (au-delà de 24 h)
+              value:
+                success: false
+                message: Session expirée, veuillez vous reconnecter
+            jetonInvalide:
+              summary: Signature incorrecte ou jeton corrompu
+              value:
+                success: false
+                message: Token invalide
+
+    LoginRateLimited:
+      description: Plus de 10 tentatives de connexion en 15 minutes
+      headers:
+        RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+          example:
+            success: false
+            message: Trop de tentatives de connexion. Réessayez dans 15 minutes.
+
+    EventNotFound:
+      description: Aucun dossier ne correspond à cet identifiant
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorSimple'
+          example:
+            message: Événement non trouvé
+
+    ServerError:
+      description: Erreur interne
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiError'
+          example:
+            success: false
+            message: Erreur serveur
+
+    ServerErrorSimple:
+      description: |
+        Erreur interne, dans la forme courte employée par les contrôleurs
+        des domaines Événements, Lieux et Témoignages.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ApiErrorSimple'
+          example:
+            message: Erreur serveur
+
+  # ── Schémas ──
+
+  schemas:
+
+    ApiSuccess:
+      type: object
+      description: Enveloppe de succès employée par la plupart des écritures.
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+
+    ApiError:
+      type: object
+      description: |
+        Forme longue. Employée par les contrôleurs d'authentification,
+        de témoignages et d'email.
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+
+    ApiErrorSimple:
+      type: object
+      description: |
+        Forme courte, sans champ `success`. Employée par les contrôleurs
+        d'événements et de lieux.
+      properties:
+        message:
+          type: string
+
+    PasswordExpiredError:
+      type: object
+      description: |
+        Réponse spécifique au mot de passe expiré. Le champ
+        `passwordExpired` permet au client de distinguer ce cas d'un
+        simple refus d'identifiants.
+      properties:
+        success:
+          type: boolean
+          example: false
+        passwordExpired:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Votre mot de passe a expiré. Veuillez le changer.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Adresse du compte administrateur
+        password:
+          type: string
+          format: password
+      additionalProperties: false
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        token:
+          type: string
+          description: Jeton JWT à placer dans l'en-tête Authorization
+        user:
+          $ref: '#/components/schemas/User'
+
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword:
+          type: string
+          format: password
+        newPassword:
+          type: string
+          format: password
+          minLength: 8
+          description: Au moins 8 caractères
+      additionalProperties: false
+
+    User:
+      type: object
+      description: Compte administrateur, sans le hachage du mot de passe.
+      properties:
+        id:
+          type: integer
+          example: 1
+        email:
+          type: string
+          format: email
+        passwordExpiration:
+          type: string
+          format: date
+          description: |
+            Date au-delà de laquelle la connexion est refusée. Repoussée
+            de 3 mois à chaque changement de mot de passe.
+          example: '2026-10-23'
+
+    # ── Domaine Événements ──
+
+    EventStatus:
+      type: string
+      enum:
+        - En attente
+        - Confirmé
+        - Annulé
+      description: 'Statut du dossier. Valeur posée à la création : `En attente`.'
+      example: Confirmé
+
+    PaymentMethod:
+      type: string
+      enum:
+        - Virement bancaire
+        - Espèces
+        - MTN Mobile Money
+        - Orange Money
+        - Chèque
+      description: |
+        Reflète exactement l'énumération MySQL. Toute autre valeur est
+        rejetée par la base sous forme de 500.
+
+        Note historique : le schéma initial ne proposait qu'un
+        « Mobile Money » générique, migré depuis vers les deux opérateurs.
+      example: MTN Mobile Money
+
+    EventInput:
+      type: object
+      description: |
+        Corps attendu à la création. Les champs requis le sont au niveau
+        du schéma MySQL ; le serveur ne les valide pas.
+      required:
+        - clientName
+        - clientEmail
+        - dateStart
+        - dateEnd
+        - locationId
+        - paymentMethod
+      properties:
+        clientName:
+          type: string
+          maxLength: 255
+          description: Nom du client, personne physique ou morale
+        clientEmail:
+          type: string
+          format: email
+          maxLength: 255
+        clientPhone:
+          type: string
+          maxLength: 50
+          description: Format libre, aucune normalisation appliquée
+        companyName:
+          type: string
+          maxLength: 255
+          nullable: true
+        dateStart:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$'
+          example: '2026-09-14T08:00'
+          description: |
+            Début de l'événement, en heure locale et **sans fuseau
+            horaire** : c'est le format produit par le champ
+            `datetime-local` du formulaire, stocké tel quel en `DATETIME`
+            MySQL.
+
+            Délibérément pas un `date-time` RFC 3339 — l'API n'accepte ni
+            suffixe `Z`, ni décalage horaire.
+        dateEnd:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$'
+          example: '2026-09-14T18:00'
+          description: |
+            Fin de l'événement, même format que `dateStart`.
+
+            Aucune vérification que cette date est postérieure au début,
+            ni qu'il n'existe pas déjà un événement sur le même créneau
+            et le même lieu.
+        locationId:
+          type: integer
+          description: |
+            Identifiant d'un lieu existant, établissement ou salle. Une
+            valeur inconnue viole la clé étrangère et produit une 500.
+        services:
+          type: array
+          items:
+            type: string
+          description: |
+            Prestations retenues, en texte libre. Stocké en colonne JSON.
+            Une valeur qui n'est pas un tableau est remplacée par un
+            tableau vide, sans erreur.
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        notes:
+          type: string
+          nullable: true
+          description: |
+            Champ libre. Le formulaire public y concatène NUI, adresse et
+            personne à contacter sous forme de texte multiligne.
+        conditionsAccepted:
+          type: boolean
+          default: false
+          description: |
+            Acceptation des conditions générales. Converti en `0` ou `1`
+            à l'enregistrement.
+
+    EventUpdateInput:
+      type: object
+      description: |
+        Corps attendu à la modification. Identique à la création, sans
+        `conditionsAccepted` — que l'opération ignore.
+      required:
+        - clientName
+        - clientEmail
+        - dateStart
+        - dateEnd
+        - locationId
+        - paymentMethod
+      properties:
+        clientName:
+          type: string
+          maxLength: 255
+        clientEmail:
+          type: string
+          format: email
+          maxLength: 255
+        clientPhone:
+          type: string
+          maxLength: 50
+        companyName:
+          type: string
+          nullable: true
+          description: Omis, ce champ est écrit à `NULL`.
+        dateStart:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$'
+          example: '2026-09-14T09:00'
+          description: Même format que pour la création, sans fuseau horaire.
+        dateEnd:
+          type: string
+          pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?$'
+          example: '2026-09-14T19:00'
+          description: Même format que pour la création, sans fuseau horaire.
+        locationId:
+          type: integer
+        services:
+          type: array
+          items:
+            type: string
+          description: |
+            Contrairement à la création, aucun repli sur un tableau vide
+            n'est appliqué ici : omettre ce champ produit une erreur SQL,
+            la colonne étant `NOT NULL`.
+        paymentMethod:
+          $ref: '#/components/schemas/PaymentMethod'
+        notes:
+          type: string
+          nullable: true
+          description: Omis, ce champ est écrit à `NULL`.
+
+    Event:
+      type: object
+      description: |
+        Dossier complet tel que renvoyé aux administrateurs. Les noms de
+        propriétés reprennent les colonnes SQL en `snake_case`, alors que
+        les corps de requête utilisent le `camelCase`.
+      properties:
+        id:
+          type: integer
+          example: 12
+        client_name:
+          type: string
+        client_email:
+          type: string
+          format: email
+        client_phone:
+          type: string
+          nullable: true
+        company_name:
+          type: string
+          nullable: true
+        date_start:
+          type: string
+          format: date-time
+        date_end:
+          type: string
+          format: date-time
+        location_id:
+          type: integer
+        location_name:
+          type: string
+          description: |
+            Champ calculé par jointure, de la forme
+            « Établissement - Salle ». Pour un établissement sans parent,
+            seul son nom apparaît.
+          example: Hilton Yaoundé - Bouma A
+        services:
+          type: array
+          items:
+            type: string
+          description: |
+            Désérialisé depuis la colonne JSON. En cas de contenu
+            illisible, un tableau vide est renvoyé plutôt qu'une erreur ;
+            l'incident n'apparaît que dans les journaux du serveur.
+        payment_method:
+          $ref: '#/components/schemas/PaymentMethod'
+        conditions_accepted:
+          type: integer
+          enum: [0, 1]
+          description: Booléen MySQL, restitué en `0` ou `1` et non en `true`/`false`.
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        notes:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    PublicEvent:
+      type: object
+      description: |
+        Projection réduite exposée au calendrier public, sans données de
+        contact ni informations de paiement.
+      properties:
+        id:
+          type: integer
+          example: 12
+        client_name:
+          type: string
+          example: Société Alpha SARL
+        date_start:
+          type: string
+          format: date-time
+        date_end:
+          type: string
+          format: date-time
+        status:
+          $ref: '#/components/schemas/EventStatus'
+        location_name:
+          type: string
+          example: Hilton Yaoundé - Bouma A
+
+    # ── Domaine Lieux ──
+
+    Location:
+      type: object
+      description: |
+        Lieu accompagné de son libellé hiérarchique calculé. Forme
+        renvoyée par `GET /locations`.
+      properties:
+        id:
+          type: integer
+          example: 2
+        name:
+          type: string
+          description: Nom court, sans le parent
+          example: Bouma A
+        parent_id:
+          type: integer
+          nullable: true
+          description: '`null` pour un établissement, sinon son identifiant'
+          example: 1
+        full_name:
+          type: string
+          description: |
+            Libellé complet : « Établissement - Salle », ou le nom seul
+            pour un établissement. C'est ce champ qu'affichent les listes
+            déroulantes.
+          example: Hilton Yaoundé - Bouma A
+
+    LocationBase:
+      type: object
+      description: |
+        Ligne brute de la table `locations`, sans libellé calculé. Forme
+        renvoyée par `GET /locations/parents` et
+        `GET /locations/children/{parentId}`.
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Hilton Yaoundé
+        parent_id:
+          type: integer
+          nullable: true
+          example: null
+        created_at:
+          type: string
+          format: date-time
+
+    # ── Domaine Témoignages ──
+
+    TestimonialInput:
+      type: object
+      required: [clientName, comment]
+      properties:
+        clientName:
+          type: string
+          maxLength: 255
+          description: Nom affiché sous l'avis, aucune vérification d'identité
+        comment:
+          type: string
+          minLength: 10
+          description: Texte de l'avis, au moins 10 caractères
+      additionalProperties: false
+
+    Testimonial:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 2
+        client_name:
+          type: string
+          example: Jean Mba
+        comment:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          description: |
+            Sert de base à la purge : l'avis disparaît 3 mois après cette
+            date.
+
+    # ── Domaine Statistiques ──
+
+    Stats:
+      type: object
+      description: Agrégats du tableau de bord, calculés à la demande.
+      properties:
+        total:
+          type: integer
+          description: Nombre total de dossiers, tous statuts confondus
+          example: 12
+        byStatus:
+          type: array
+          description: |
+            Répartition par statut. Un statut sans dossier est absent du
+            tableau.
+          items:
+            type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/EventStatus'
+              count:
+                type: integer
+        byMonth:
+          type: array
+          description: |
+            Volumétrie de l'année civile en cours, d'après `date_start`.
+            Les mois sans dossier sont absents.
+          items:
+            type: object
+            properties:
+              month:
+                type: integer
+                minimum: 1
+                maximum: 12
+                description: Numéro du mois, de 1 à 12
+              count:
+                type: integer
+        topServices:
+          type: array
+          description: |
+            Les 5 prestations les plus demandées, par fréquence
+            décroissante. Le décompte porte sur le nombre de dossiers
+            mentionnant la prestation, pas sur des quantités.
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              count:
+                type: integer
+
+    # ── Domaine Contact ──
+
+    ContactRequest:
+      type: object
+      required: [name, email, subject, message]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        email:
+          type: string
+          format: email
+          maxLength: 255
+          description: |
+            Validée par expression régulière côté serveur, et utilisée
+            comme destinataire de l'accusé de réception.
+        phone:
+          type: string
+          maxLength: 50
+          nullable: true
+          description: Seul champ facultatif du formulaire
+        subject:
+          type: string
+          maxLength: 255
+        message:
+          type: string
+      additionalProperties: false

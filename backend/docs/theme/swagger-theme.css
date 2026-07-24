@@ -1,0 +1,686 @@
+/* ═══════════════════════════════════════════════════════════════════
+   NetandPro Events — Thème Swagger UI
+   ═══════════════════════════════════════════════════════════════════
+
+   Les valeurs ci-dessous ne sont pas choisies : elles sont reprises de
+   frontend/src/styles/admin.css afin que la documentation appartienne
+   visuellement au même produit que le back-office.
+
+   Correspondance :
+     --np-bg        ← --admin-primary      #0f172a
+     --np-surface   ← --admin-secondary    #1e293b
+     --np-accent    ← --admin-accent       #3b82f6
+     --np-success   ← --admin-success      #10b981
+     --np-warning   ← --admin-warning      #f59e0b
+     --np-danger    ← --admin-danger       #ef4444
+     --np-text      ← --admin-text         #f8fafc
+     --np-muted     ← --admin-text-muted   #94a3b8
+   ═══════════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+    --np-bg: #0f172a;
+    --np-bg-deep: #0a1122;
+    --np-surface: #1e293b;
+    --np-surface-soft: rgba(255, 255, 255, 0.04);
+    --np-surface-hover: rgba(255, 255, 255, 0.07);
+
+    --np-accent: #3b82f6;
+    --np-accent-hover: #2563eb;
+    --np-success: #10b981;
+    --np-warning: #f59e0b;
+    --np-danger: #ef4444;
+    --np-purple: #8b5cf6;
+
+    --np-text: #f8fafc;
+    --np-muted: #94a3b8;
+    --np-border: rgba(148, 163, 184, 0.14);
+
+    --np-radius: 12px;
+    --np-radius-sm: 8px;
+    --np-shadow: 0 10px 40px rgba(0, 0, 0, 0.25);
+
+    --np-font: 'Inter', -apple-system, 'Segoe UI', Roboto, sans-serif;
+    --np-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+}
+
+/* ── Fond général ────────────────────────────────────────────────── */
+
+body {
+    background: var(--np-bg);
+    /* Halos radiaux repris de .admin-layout::before */
+    background-image:
+        radial-gradient(circle at 15% 10%, rgba(59, 130, 246, 0.10) 0%, transparent 45%),
+        radial-gradient(circle at 85% 90%, rgba(16, 185, 129, 0.08) 0%, transparent 45%);
+    background-attachment: fixed;
+    margin: 0;
+}
+
+.swagger-ui {
+    font-family: var(--np-font);
+    color: var(--np-text);
+}
+
+.swagger-ui .wrapper {
+    max-width: 1240px;
+    padding: 0 1.5rem;
+}
+
+.swagger-ui,
+.swagger-ui p,
+.swagger-ui li,
+.swagger-ui h1, .swagger-ui h2, .swagger-ui h3,
+.swagger-ui h4, .swagger-ui h5,
+.swagger-ui label,
+.swagger-ui table thead tr td,
+.swagger-ui table thead tr th,
+.swagger-ui .parameter__name,
+.swagger-ui .parameter__type,
+.swagger-ui .response-col_status,
+.swagger-ui .response-col_links,
+.swagger-ui .tab li,
+.swagger-ui .opblock-description-wrapper p,
+.swagger-ui .opblock-external-docs-wrapper p,
+.swagger-ui .opblock-title_normal p {
+    color: var(--np-text);
+    font-family: var(--np-font);
+}
+
+.swagger-ui .markdown p,
+.swagger-ui .renderedMarkdown p {
+    color: var(--np-muted);
+    line-height: 1.7;
+}
+
+/* ── Barre supérieure : élément signature ────────────────────────── */
+
+.swagger-ui .topbar {
+    background: rgba(15, 23, 42, 0.85);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--np-border);
+    padding: 1rem 0;
+    box-shadow: var(--np-shadow);
+}
+
+.swagger-ui .topbar .topbar-wrapper {
+    max-width: 1240px;
+    margin: 0 auto;
+    padding: 0 1.5rem;
+    align-items: center;
+}
+
+/* Le logo Swagger d'origine est remplacé par celui de l'entreprise. */
+.swagger-ui .topbar .topbar-wrapper .link img,
+.swagger-ui .topbar .topbar-wrapper svg {
+    display: none;
+}
+
+.swagger-ui .topbar .topbar-wrapper .link {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    text-decoration: none;
+}
+
+.swagger-ui .topbar .topbar-wrapper .link::before {
+    content: '';
+    width: 38px;
+    height: 38px;
+    flex-shrink: 0;
+    background: url('../assets/logo.png') center / contain no-repeat;
+    border-radius: 10px;
+}
+
+.swagger-ui .topbar .topbar-wrapper .link::after {
+    content: 'NetandPro Events';
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: -0.4px;
+    /* Dégradé signature repris de .sidebar-logo-main */
+    background: linear-gradient(135deg, #3b82f6, #10b981);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+}
+
+/* La barre « Explore » n'a pas d'usage sur une spec servie localement. */
+.swagger-ui .topbar .download-url-wrapper {
+    display: none;
+}
+
+/* ── Bloc d'en-tête (titre, version, contact) ────────────────────── */
+
+.swagger-ui .info {
+    margin: 2.5rem 0 2rem;
+    padding: 2rem;
+    background: var(--np-surface-soft);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--np-border);
+    border-radius: 20px;
+}
+
+.swagger-ui .info .title {
+    color: var(--np-text);
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.swagger-ui .info .title small {
+    background: var(--np-accent);
+    border-radius: 999px;
+    padding: 0.15rem 0.65rem;
+    vertical-align: middle;
+}
+
+.swagger-ui .info .title small pre {
+    font-family: var(--np-mono);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.swagger-ui .info a,
+.swagger-ui a.nostyle,
+.swagger-ui .markdown a {
+    color: var(--np-accent);
+    text-decoration: none;
+    transition: color 0.2s ease;
+}
+
+.swagger-ui .info a:hover,
+.swagger-ui .markdown a:hover {
+    color: var(--np-success);
+}
+
+.swagger-ui .info .base-url,
+.swagger-ui .info hgroup.main a {
+    color: var(--np-muted);
+    font-family: var(--np-mono);
+    font-size: 0.85rem;
+}
+
+/* ── Sélecteur de serveur ────────────────────────────────────────── */
+
+.swagger-ui .scheme-container {
+    background: var(--np-surface-soft);
+    backdrop-filter: blur(20px);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius);
+    box-shadow: none;
+    padding: 1.25rem 1.5rem;
+    margin-bottom: 2rem;
+}
+
+.swagger-ui .servers > label {
+    color: var(--np-muted);
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+
+.swagger-ui select {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius-sm);
+    color: var(--np-text);
+    font-family: var(--np-font);
+    font-size: 0.9rem;
+    padding: 0.6rem 2.2rem 0.6rem 0.85rem;
+    box-shadow: none;
+    /* La flèche native est invisible sur fond sombre : on la redessine. */
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2394a3b8' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+}
+
+.swagger-ui select option {
+    background: var(--np-surface);
+    color: var(--np-text);
+}
+
+/* ── Bouton Authorize ────────────────────────────────────────────── */
+
+.swagger-ui .auth-wrapper .authorize {
+    background: linear-gradient(135deg, var(--np-accent), var(--np-accent-hover));
+    border: none;
+    border-radius: var(--np-radius-sm);
+    color: #fff;
+    font-weight: 600;
+    padding: 0.6rem 1.1rem;
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.swagger-ui .auth-wrapper .authorize:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+}
+
+.swagger-ui .auth-wrapper .authorize svg {
+    fill: #fff;
+}
+
+/* ── Regroupements par tag ───────────────────────────────────────── */
+
+.swagger-ui .opblock-tag {
+    border-bottom: 1px solid var(--np-border);
+    color: var(--np-text);
+    font-size: 1.3rem;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    margin: 2.5rem 0 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.swagger-ui .opblock-tag:hover {
+    background: transparent;
+}
+
+.swagger-ui .opblock-tag small {
+    color: var(--np-muted);
+    font-size: 0.85rem;
+    font-weight: 400;
+}
+
+.swagger-ui .opblock-tag svg,
+.swagger-ui .expand-methods svg,
+.swagger-ui .expand-operation svg {
+    fill: var(--np-muted);
+}
+
+/* ── Blocs d'opération ───────────────────────────────────────────── */
+
+.swagger-ui .opblock {
+    background: var(--np-surface-soft);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius);
+    box-shadow: none;
+    margin: 0 0 0.85rem;
+    transition: border-color 0.2s ease, transform 0.2s ease;
+}
+
+.swagger-ui .opblock:hover {
+    border-color: rgba(148, 163, 184, 0.3);
+}
+
+.swagger-ui .opblock .opblock-summary {
+    border-bottom: none;
+    padding: 0.65rem 0.85rem;
+}
+
+.swagger-ui .opblock .opblock-summary-method {
+    border-radius: var(--np-radius-sm);
+    font-family: var(--np-mono);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    min-width: 82px;
+    padding: 0.55rem 0;
+    text-shadow: none;
+    box-shadow: none;
+}
+
+.swagger-ui .opblock .opblock-summary-path,
+.swagger-ui .opblock .opblock-summary-path__deprecated {
+    color: var(--np-text);
+    font-family: var(--np-mono);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+.swagger-ui .opblock .opblock-summary-description {
+    color: var(--np-muted);
+    font-size: 0.88rem;
+}
+
+/* Chaque méthode HTTP reçoit la couleur sémantique du projet :
+   lecture = neutre bleu, création = vert, modification = ambre,
+   suppression = rouge. */
+
+.swagger-ui .opblock.opblock-get {
+    border-left: 3px solid var(--np-accent);
+}
+.swagger-ui .opblock.opblock-get .opblock-summary-method {
+    background: var(--np-accent);
+}
+
+.swagger-ui .opblock.opblock-post {
+    border-left: 3px solid var(--np-success);
+}
+.swagger-ui .opblock.opblock-post .opblock-summary-method {
+    background: var(--np-success);
+}
+
+.swagger-ui .opblock.opblock-put {
+    border-left: 3px solid var(--np-warning);
+}
+.swagger-ui .opblock.opblock-put .opblock-summary-method {
+    background: var(--np-warning);
+}
+
+.swagger-ui .opblock.opblock-patch {
+    border-left: 3px solid var(--np-purple);
+}
+.swagger-ui .opblock.opblock-patch .opblock-summary-method {
+    background: var(--np-purple);
+}
+
+.swagger-ui .opblock.opblock-delete {
+    border-left: 3px solid var(--np-danger);
+}
+.swagger-ui .opblock.opblock-delete .opblock-summary-method {
+    background: var(--np-danger);
+}
+
+.swagger-ui .opblock.is-open {
+    background: rgba(255, 255, 255, 0.055);
+}
+
+.swagger-ui .opblock .opblock-section-header {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--np-radius-sm);
+    border-bottom: 1px solid var(--np-border);
+    box-shadow: none;
+}
+
+.swagger-ui .opblock .opblock-section-header h4,
+.swagger-ui .opblock .opblock-section-header > label {
+    color: var(--np-text);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+/* Cadenas des opérations protégées */
+.swagger-ui .authorization__btn svg {
+    fill: var(--np-warning);
+}
+
+/* ── Tableaux : paramètres et réponses ───────────────────────────── */
+
+.swagger-ui table {
+    border-collapse: collapse;
+}
+
+.swagger-ui table thead tr td,
+.swagger-ui table thead tr th {
+    border-bottom: 1px solid var(--np-border);
+    color: var(--np-muted);
+    font-size: 0.75rem;
+    font-weight: 600;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+    padding: 0.8rem 0.6rem;
+}
+
+.swagger-ui .parameters-col_description input[type=text],
+.swagger-ui textarea,
+.swagger-ui input[type=text],
+.swagger-ui input[type=password],
+.swagger-ui input[type=email],
+.swagger-ui input[type=search] {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius-sm);
+    color: var(--np-text);
+    font-family: var(--np-mono);
+    font-size: 0.85rem;
+    padding: 0.6rem 0.8rem;
+}
+
+.swagger-ui input:focus,
+.swagger-ui textarea:focus,
+.swagger-ui select:focus {
+    border-color: var(--np-accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    outline: none;
+}
+
+.swagger-ui .parameter__name {
+    font-family: var(--np-mono);
+    font-size: 0.88rem;
+    font-weight: 600;
+}
+
+.swagger-ui .parameter__name.required::after {
+    color: var(--np-danger);
+}
+
+.swagger-ui .parameter__type,
+.swagger-ui .parameter__in,
+.swagger-ui .prop-format {
+    color: var(--np-muted);
+    font-family: var(--np-mono);
+    font-size: 0.75rem;
+}
+
+.swagger-ui .response-col_status {
+    font-family: var(--np-mono);
+    font-size: 0.95rem;
+    font-weight: 600;
+}
+
+/* ── Blocs de code ───────────────────────────────────────────────── */
+
+.swagger-ui .highlight-code > .microlight,
+.swagger-ui .model-example pre,
+.swagger-ui pre.microlight,
+.swagger-ui .curl-command .curl,
+.swagger-ui .responses-inner pre {
+    background: var(--np-bg-deep) !important;
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius-sm);
+    color: #cbd5e1 !important;
+    font-family: var(--np-mono);
+    font-size: 0.82rem;
+    line-height: 1.65;
+}
+
+.swagger-ui .copy-to-clipboard {
+    background: var(--np-surface-hover);
+    border-radius: 6px;
+}
+
+.swagger-ui .copy-to-clipboard button {
+    background: transparent;
+}
+
+/* ── Schémas et modèles ──────────────────────────────────────────── */
+
+.swagger-ui .model-box,
+.swagger-ui section.models {
+    background: var(--np-surface-soft);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius);
+}
+
+.swagger-ui section.models .model-container {
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: var(--np-radius-sm);
+}
+
+.swagger-ui section.models .model-container:hover {
+    background: var(--np-surface-hover);
+}
+
+.swagger-ui section.models h4 {
+    color: var(--np-text);
+}
+
+.swagger-ui .model,
+.swagger-ui .model-title,
+.swagger-ui .prop-type {
+    color: var(--np-text);
+    font-family: var(--np-mono);
+}
+
+.swagger-ui .model .property.primitive,
+.swagger-ui .prop-name {
+    color: var(--np-muted);
+}
+
+/* La flèche de repli est une image sombre par défaut : invisible ici. */
+.swagger-ui .model-toggle::after {
+    filter: invert(85%) sepia(10%) saturate(400%) hue-rotate(180deg);
+}
+
+/* ── Boutons ─────────────────────────────────────────────────────── */
+
+.swagger-ui .btn {
+    border-radius: var(--np-radius-sm);
+    border: 1px solid var(--np-border);
+    color: var(--np-text);
+    font-family: var(--np-font);
+    font-weight: 600;
+    box-shadow: none;
+    transition: all 0.2s ease;
+}
+
+.swagger-ui .btn:hover {
+    background: var(--np-surface-hover);
+}
+
+.swagger-ui .btn.execute {
+    background: linear-gradient(135deg, var(--np-accent), var(--np-accent-hover));
+    border: none;
+    color: #fff;
+    box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+}
+
+.swagger-ui .btn.execute:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px rgba(59, 130, 246, 0.4);
+}
+
+.swagger-ui .btn.cancel {
+    background: rgba(239, 68, 68, 0.12);
+    border-color: rgba(239, 68, 68, 0.35);
+    color: var(--np-danger);
+}
+
+.swagger-ui .btn.try-out__btn {
+    background: rgba(255, 255, 255, 0.06);
+}
+
+/* ── Onglets et filtre ───────────────────────────────────────────── */
+
+.swagger-ui .tab li {
+    color: var(--np-muted);
+    font-size: 0.85rem;
+}
+
+.swagger-ui .tab li.active {
+    color: var(--np-accent);
+    font-weight: 600;
+}
+
+.swagger-ui .filter .operation-filter-input {
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid var(--np-border);
+    border-radius: var(--np-radius-sm);
+    color: var(--np-text);
+    padding: 0.7rem 1rem;
+    width: 100%;
+    max-width: 380px;
+}
+
+/* ── Retours d'exécution ─────────────────────────────────────────── */
+
+.swagger-ui .responses-inner h4,
+.swagger-ui .responses-inner h5 {
+    color: var(--np-muted);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+
+.swagger-ui .live-responses-table .response-col_status {
+    color: var(--np-success);
+}
+
+.swagger-ui .response-control-media-type--accept-controller small {
+    color: var(--np-success);
+}
+
+/* ── Messages d'erreur de la spec ────────────────────────────────── */
+
+.swagger-ui .errors-wrapper {
+    background: rgba(239, 68, 68, 0.1);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: var(--np-radius);
+}
+
+.swagger-ui .errors-wrapper .errors h4,
+.swagger-ui .errors-wrapper hgroup h4 {
+    color: var(--np-danger);
+}
+
+/* ── Barre de défilement ─────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.04);
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(59, 130, 246, 0.35);
+    border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(59, 130, 246, 0.55);
+}
+
+/* ── Plancher de qualité ─────────────────────────────────────────── */
+
+/* Focus clavier visible : Swagger UI le supprime par défaut sur
+   plusieurs contrôles, ce qui rend la navigation au clavier aveugle. */
+.swagger-ui a:focus-visible,
+.swagger-ui button:focus-visible,
+.swagger-ui input:focus-visible,
+.swagger-ui select:focus-visible,
+.swagger-ui textarea:focus-visible,
+.swagger-ui .opblock-summary:focus-visible {
+    outline: 2px solid var(--np-accent);
+    outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .swagger-ui *,
+    .swagger-ui *::before,
+    .swagger-ui *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
+@media (max-width: 768px) {
+    .swagger-ui .info {
+        padding: 1.25rem;
+    }
+
+    .swagger-ui .info .title {
+        font-size: 1.5rem;
+    }
+
+    .swagger-ui .opblock .opblock-summary-method {
+        min-width: 68px;
+        font-size: 0.68rem;
+    }
+
+    .swagger-ui .opblock .opblock-summary-path {
+        font-size: 0.82rem;
+    }
+
+    .swagger-ui .topbar .topbar-wrapper .link::after {
+        font-size: 0.95rem;
+    }
+}

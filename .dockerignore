@@ -11,3 +11,5 @@ npm-debug.log
 Dockerfile
 
 README.md
+backend/.env
+**/.env

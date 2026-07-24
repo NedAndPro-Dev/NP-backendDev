@@ -10,6 +10,7 @@ const authRoutes = require('./routes/authRoutes');
 const testimonialRoutes = require('./routes/testimonialRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const emailRoutes = require('./routes/emailRoutes');
+const { mountApiDocs } = require('./docs/swagger');
 
 require('./utils/cleanupTestimonials');
 
@@ -50,6 +51,8 @@ app.use('/api/locations', locationRoutes);
 app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/email', emailRoutes);
+
+mountApiDocs(app);
 
 // Gestion des erreurs 404
 app.use((req, res) => {
