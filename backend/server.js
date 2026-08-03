@@ -10,6 +10,7 @@ const authRoutes = require('./routes/authRoutes');
 const testimonialRoutes = require('./routes/testimonialRoutes');
 const statsRoutes = require('./routes/statsRoutes');
 const emailRoutes = require('./routes/emailRoutes');
+const contactRoutes = require('./routes/contactRoutes');
 const { mountApiDocs } = require('./docs/swagger');
 
 require('./utils/cleanupTestimonials');
@@ -51,6 +52,7 @@ app.use('/api/locations', locationRoutes);
 app.use('/api/testimonials', testimonialRoutes);
 app.use('/api/stats', statsRoutes);
 app.use('/api/email', emailRoutes);
+app.use('/api/contact-messages', contactRoutes);
 
 mountApiDocs(app);
 
