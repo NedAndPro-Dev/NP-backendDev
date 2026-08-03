@@ -166,6 +166,29 @@ class Event {
         const [result] = await pool.execute(query, [id]);
         return result.affectedRows > 0;
     }
+
+    // Événements d'une plage de dates, pour le calendrier admin
+    static async getForCalendar(from, to) {
+        const query = `
+            SELECT
+                e.id, e.client_name, e.client_email, e.date_start, e.date_end,
+                e.status, e.services,
+                CONCAT(
+                    COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
+                    IF(l.parent_id IS NOT NULL, ' - ', ''),
+                    l.name
+                ) AS location_name,
+                l.capacity AS location_capacity
+            FROM events e
+            LEFT JOIN locations l ON e.location_id = l.id
+            WHERE e.status <> 'Annulé'
+              AND DATE(e.date_end)   >= ?
+              AND DATE(e.date_start) <= ?
+            ORDER BY e.date_start ASC
+        `;
+        const [rows] = await pool.execute(query, [from, to]);
+        return rows.map(r => ({ ...r, services: undefined }));
+    }
 }
 
 module.exports = Event;

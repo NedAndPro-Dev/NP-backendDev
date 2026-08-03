@@ -14,6 +14,8 @@ router.post('/', eventController.createEvent);
 // Liste complète des événements (admin)
 router.get('/', authMiddleware, eventController.getAllEvents);
 
+router.get('/calendar', authMiddleware, eventController.getCalendar);
+
 // Détails d'un événement (admin)
 router.get('/:id', authMiddleware, eventController.getEventById);
 

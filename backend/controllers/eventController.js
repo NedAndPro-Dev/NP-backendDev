@@ -151,6 +151,21 @@ const deleteEvent = async (req, res) => {
     }
 };
 
+// GET /api/events/calendar?from=2026-08-01&to=2026-09-06
+const getCalendar = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || '');
+        if (!isDate(from) || !isDate(to)) {
+            return res.status(422).json({ message: 'Paramètres from/to requis au format YYYY-MM-DD.' });
+        }
+        res.json(await Event.getForCalendar(from, to));
+    } catch (error) {
+        console.error('Erreur getCalendar:', error);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
+};
+
 //  Exporter les fonctions
 module.exports = {
     createEvent,
@@ -159,5 +174,6 @@ module.exports = {
     getEventById,
     updateEvent,
     updateEventStatus,
-    deleteEvent
+    deleteEvent,
+    getCalendar
 };
