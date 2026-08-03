@@ -5,7 +5,7 @@ const Event = require('../models/Event');
 const createEvent = async (req, res) => {
     try {
         const eventId = await Event.create(req.body);
-        
+
         res.status(201).json({
             success: true,
             message: 'Événement créé avec succès',
@@ -46,11 +46,11 @@ const getPublicEvents = async (req, res) => {
 const getEventById = async (req, res) => {
     try {
         const event = await Event.getById(req.params.id);
-        
+
         if (!event) {
             return res.status(404).json({ message: 'Événement non trouvé' });
         }
-        
+
         res.json(event);
     } catch (error) {
         console.error('Erreur récupération événement:', error);
@@ -70,6 +70,7 @@ const updateEvent = async (req, res) => {
             dateStart,
             dateEnd,
             locationId,
+            numberOfPeople,
             services,
             paymentMethod,
             notes
@@ -84,6 +85,7 @@ const updateEvent = async (req, res) => {
                 date_start = ?,
                 date_end = ?,
                 location_id = ?,
+                number_of_people = ?,
                 services = ?,
                 payment_method = ?,
                 notes = ?
@@ -98,6 +100,7 @@ const updateEvent = async (req, res) => {
             dateStart,
             dateEnd,
             locationId,
+            numberOfPeople || null,
             JSON.stringify(services),
             paymentMethod,
             notes || null,
@@ -120,11 +123,11 @@ const updateEventStatus = async (req, res) => {
     try {
         const { status } = req.body;
         const updated = await Event.updateStatus(req.params.id, status);
-        
+
         if (!updated) {
             return res.status(404).json({ message: 'Événement non trouvé' });
         }
-        
+
         res.json({ success: true, message: 'Statut mis à jour' });
     } catch (error) {
         console.error('Erreur mise à jour statut:', error);
@@ -136,11 +139,11 @@ const updateEventStatus = async (req, res) => {
 const deleteEvent = async (req, res) => {
     try {
         const deleted = await Event.delete(req.params.id);
-        
+
         if (!deleted) {
             return res.status(404).json({ message: 'Événement non trouvé' });
         }
-        
+
         res.json({ success: true, message: 'Événement supprimé' });
     } catch (error) {
         console.error('Erreur suppression événement:', error);
@@ -154,7 +157,7 @@ module.exports = {
     getAllEvents,
     getPublicEvents,
     getEventById,
-    updateEvent,          
+    updateEvent,
     updateEventStatus,
     deleteEvent
 };

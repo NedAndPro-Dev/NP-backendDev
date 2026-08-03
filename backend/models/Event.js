@@ -17,7 +17,7 @@ class Event {
             conditionsAccepted
         } = eventData;
 
-        // S'assurer que services est un
+        // S'assurer que services est un tableau
         const servicesArray = Array.isArray(services) ? services : [];
 
         const query = `
@@ -61,24 +61,20 @@ class Event {
         `;
 
         const [rows] = await pool.execute(query);
-        
+
         // Parser les services JSON avec gestion d'erreurs ROBUSTE
         return rows.map(event => {
             let parsedServices = [];
-            
+
             try {
-                // Vérifier si services existe et est une string
                 if (event.services && typeof event.services === 'string') {
-                    // Vérifier si ça commence par '[' (JSON array)
                     if (event.services.trim().startsWith('[')) {
                         parsedServices = JSON.parse(event.services);
                     } else {
-                        // Si c'est du texte brut, le mettre dans un array
                         console.warn(`⚠️ Services non-JSON pour événement ${event.id}: ${event.services}`);
                         parsedServices = [event.services];
                     }
                 } else if (Array.isArray(event.services)) {
-                    // Déjà un array (ne devrait pas arriver)
                     parsedServices = event.services;
                 }
             } catch (error) {
@@ -86,7 +82,7 @@ class Event {
                 console.error(`   Données brutes: ${event.services}`);
                 parsedServices = [];
             }
-            
+
             return {
                 ...event,
                 services: parsedServices
@@ -95,11 +91,11 @@ class Event {
     }
 
     // Récupérer les événements publics (pour le calendrier)
+    // Projection sans donnée identifiante : ni nom du client, ni email, ni téléphone.
     static async getPublicEvents() {
         const query = `
             SELECT 
                 e.id,
-                e.client_name,
                 e.date_start,
                 e.date_end,
                 e.status,
@@ -134,9 +130,9 @@ class Event {
         `;
 
         const [rows] = await pool.execute(query, [id]);
-        
+
         if (rows.length === 0) return null;
-        
+
         let parsedServices = [];
         try {
             if (rows[0].services && typeof rows[0].services === 'string') {
@@ -150,7 +146,7 @@ class Event {
             console.error(`Erreur parsing services pour événement ${id}:`, error);
             parsedServices = [];
         }
-        
+
         return {
             ...rows[0],
             services: parsedServices
