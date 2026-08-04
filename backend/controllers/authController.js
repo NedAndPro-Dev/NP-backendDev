@@ -1,5 +1,6 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
+const audit = require("../services/audit");
 
 // Connexion admin
 exports.login = async (req, res) => {
@@ -18,6 +19,10 @@ exports.login = async (req, res) => {
     const user = await User.findByEmail(email);
 
     if (!user) {
+      await audit.record(req, {
+        category: 'acces', action: 'Connexion refusée', target: email,
+        detail: 'Email inconnu', status: 'echec', httpStatus: 401
+      });
       return res.status(401).json({
         success: false,
         message: "Identifiants incorrects",
@@ -31,6 +36,10 @@ exports.login = async (req, res) => {
     );
 
     if (!isPasswordValid) {
+      await audit.record(req, {
+        category: 'acces', action: 'Connexion refusée', target: email,
+        detail: 'Email ou mot de passe incorrect', status: 'echec', httpStatus: 401
+      });
       return res.status(401).json({
         success: false,
         message: "Identifiants incorrects",
@@ -69,6 +78,15 @@ exports.login = async (req, res) => {
 
     // Tracer la connexion
     await User.touchLogin(user.id);
+
+    // authMiddleware n'est pas passé par là : on renseigne l'acteur nous-mêmes.
+    // On mute req plutôt que d'en faire une copie : `headers` est un accesseur
+    // de prototype, qu'un spread ne recopierait pas (l'audit perdrait l'IP).
+    req.user = { id: user.id, name: user.name, email: user.email, role: user.role };
+    await audit.record(req, {
+      category: 'acces', action: 'Connexion réussie', target: 'Console admin',
+      httpStatus: 200
+    });
 
     res.json({
       success: true,
@@ -156,11 +174,17 @@ exports.verifyToken = async (req, res) => {
       });
     }
 
+    // Même forme que la réponse de login : AuthContext remplace l'utilisateur
+    // par ce que renvoie /verify au rechargement. Toute clé absente ici est
+    // perdue pour l'interface, même si login l'avait bien fournie.
     res.json({
       success: true,
       user: {
         id: user.id,
+        name: user.name,
         email: user.email,
+        role: user.role,
+        mustChangePassword: !!user.must_change_password,
         passwordExpiration: user.password_expiration,
       },
     });

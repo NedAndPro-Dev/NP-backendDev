@@ -1,5 +1,6 @@
 const Testimonial = require('../models/Testimonial');
 const Setting = require('../models/Setting');
+const audit = require('../services/audit');
 
 // ── Public ─────────────────────────────────────────────────────────────
 exports.createTestimonial = async (req, res) => {
@@ -80,6 +81,15 @@ exports.updateStatus = async (req, res) => {
         }
         const updated = await Testimonial.setStatus(req.params.id, status, req.user?.id || null);
         if (!updated) return res.status(404).json({ message: 'Témoignage introuvable' });
+
+        await audit.record(req, {
+            category: 'moder',
+            action: status === 'publie' ? 'Témoignage publié' : status === 'masque' ? 'Témoignage masqué' : 'Témoignage remis en modération',
+            target: `Avis #${req.params.id} — ${updated.client_name}`,
+            detail: `Note ${updated.rating || '—'}/5`,
+            changes: [{ key: 'status', before: 'précédent', after: status }],
+            httpStatus: 200
+        });
 
         const labels = { publie: 'Témoignage publié sur le site', masque: 'Témoignage masqué', en_attente: 'Remis en modération' };
         res.json({ success: true, message: labels[status], data: updated });

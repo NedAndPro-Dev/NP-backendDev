@@ -65,6 +65,21 @@ const tick = async () => {
     try {
         const [a, b] = [await runReminders(), await runReviewRequests()];
         if (a || b) console.log(`📧 Automatismes : ${a} rappel(s), ${b} demande(s) d'avis`);
+
+        if (a) {
+            // reminder_days est relu ici : il n'est pas dans la portée de tick()
+            const days = Number(await Setting.get('reminder_days', 0)) || 0;
+            require('./audit').recordSystem({
+                category: 'email', action: 'Rappels envoyés', target: `${a} destinataire(s)`,
+                detail: `Rappel J-${days} pour les événements à venir`
+            });
+        }
+
+        // systeme.log_retention_days : purge du journal d'audit
+        const AuditLog = require('../models/AuditLog');
+        const keep = Number(await Setting.get('log_retention_days', 90)) || 90;
+        const purged = await AuditLog.purge(keep);
+        if (purged) console.log(`🧾 Journal d'audit : ${purged} entrée(s) au-delà de ${keep} jours supprimée(s)`);
     } catch (e) {
         console.error('mailScheduler:', e.message);
     }

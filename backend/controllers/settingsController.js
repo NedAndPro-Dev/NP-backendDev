@@ -7,6 +7,7 @@ const {
     getTransporter, getFrom, getReplyTo, resetTransporter, wrap,
     verifyTransport, describeMailError, cleanPass, MASK, logMail
 } = require('../utils/mailer');
+const audit = require('../services/audit');
 
 const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
@@ -178,10 +179,24 @@ exports.update = async (req, res) => {
         // accent_default est une référence figée : on refuse toute écriture
         delete patch.accent_default;
 
+        const before = await Setting.all();
+        const changes = audit.diffSettings(before, patch, { secretKeys: ['smtp_pass'] });
+
         const { updated, ignored } = await Setting.setMany(patch, req.user.id);
 
         // Un changement SMTP invalide le transporteur en cache
         if (Object.keys(patch).some(k => k.startsWith('smtp_'))) resetTransporter();
+
+        const sensitive = ['maintenance_mode', 'allow_overlap', 'allow_over_capacity', 'auto_confirm'];
+        await audit.record(req, {
+            category: 'param',
+            action: 'Paramètres enregistrés',
+            target: `${changes.length} valeur(s) modifiée(s)`,
+            detail: changes.map(c => `${c.key} : ${c.before} → ${c.after}`).join(' · ').slice(0, 480) || 'Aucune valeur modifiée',
+            status: changes.some(c => sensitive.includes(c.key)) ? 'attention' : 'succes',
+            changes,
+            httpStatus: 200
+        });
 
         res.json({
             success: true,
@@ -459,12 +474,20 @@ exports.testEmail = async (req, res) => {
 
         await backup.log('test_email', `envoyé à ${to}`, req.user.id);
         await logMail('test', null, to, 'envoye');
+        await audit.record(req, {
+            category: 'email', action: 'Email de test envoyé', target: to,
+            detail: `${cfg.host}:${cfg.port} — connexion vérifiée avant envoi`, httpStatus: 200
+        });
         res.json({ success: true, message: `Email de test envoyé à ${to}` });
     } catch (error) {
         const { status, message } = describeMailError(error);
         console.error('Erreur testEmail:', error.code || '', error.message);
         await backup.log('test_email', `${error.code || 'ERR'} — ${error.message}`, req.user.id, 'echec').catch(() => {});
         await logMail('test', null, to, 'echec', (error.code || '') + ' ' + error.message);
+        await audit.record(req, {
+            category: 'email', action: 'Test SMTP refusé', target: `${error.code || 'ERR'}`,
+            detail: message, status: 'echec', httpStatus: status
+        });
         res.status(status).json({ success: false, code: error.code || null, message });
     }
 };

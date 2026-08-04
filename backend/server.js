@@ -17,6 +17,8 @@ const { mountApiDocs } = require('./docs/swagger');
 const path = require('path');
 const settingsRoutes = require('./routes/settingsRoutes');
 const maintenanceMode = require('./middleware/maintenanceMode');
+const auditRoutes = require('./routes/auditRoutes');
+const { auditTrail } = require('./services/audit');
 require('./services/autoBackup').start();
 require('./services/mailScheduler').start();
 
@@ -39,6 +41,7 @@ app.use(cors({
 
 app.use(express.json());
 app.use(maintenanceMode);
+app.use(auditTrail);
 app.use(express.urlencoded({ extended: true }));
 
 // Header de sécurité : Empêcher l'indexation des pages admin
@@ -71,6 +74,7 @@ app.use('/api/email', emailRoutes);
 app.use('/api/contact-messages', contactRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/audit', auditRoutes);
 
 mountApiDocs(app);
 

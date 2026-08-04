@@ -5,6 +5,7 @@ const {
     defaultStatus, autoConfirm, waitlistEnabled, cancelPolicy
 } = require('../services/settingsGuard');
 const { onBookingCreated, onStatusChanged } = require('../services/mailEvents');
+const audit = require('../services/audit');
 
 /**
  * L'API publique reçoit du camelCase (dateStart, locationId...), tandis que
@@ -204,6 +205,16 @@ const updateEventStatus = async (req, res) => {
         if (!updated) return res.status(404).json({ message: 'Événement non trouvé' });
 
         const mail = await onStatusChanged(event, status, cancellation);
+
+        await audit.record(req, {
+            category: 'resa',
+            action: status === 'Annulé' ? 'Dossier annulé' : status === 'Confirmé' ? 'Dossier confirmé' : 'Statut modifié',
+            target: `Réservation #${event.id} — ${event.location_name || 'salle non précisée'}`,
+            detail: cancellation ? cancellation.message : `Passage de « ${event.status} » à « ${status} »`,
+            status: cancellation && cancellation.late ? 'attention' : 'succes',
+            changes: [{ key: 'status', before: event.status, after: status }],
+            httpStatus: 200
+        });
 
         res.json({
             success: true,
