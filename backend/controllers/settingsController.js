@@ -3,7 +3,10 @@ const fs = require('fs');
 const pool = require('../config/database');
 const Setting = require('../models/Setting');
 const backup = require('../services/backupService');
-const { getTransporter, getFrom, resetTransporter, wrap } = require('../utils/mailer');
+const {
+    getTransporter, getFrom, getReplyTo, resetTransporter, wrap,
+    verifyTransport, describeMailError, cleanPass, MASK, logMail
+} = require('../utils/mailer');
 
 const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
@@ -152,6 +155,24 @@ exports.update = async (req, res) => {
         // Ces deux champs sont toujours obligatoires côté formulaire public
         if (Array.isArray(patch.required_fields)) {
             patch.required_fields = Array.from(new Set([...patch.required_fields, 'client_name', 'client_email']));
+        }
+
+        // Le mot de passe d'application arrive avec des espaces (affichage Google)
+        // et parfois sous forme de masque si le champ a été touché sans être saisi.
+        if (patch.smtp_pass !== undefined) {
+            const p = cleanPass(patch.smtp_pass);
+            if (!p || p === cleanPass(MASK)) delete patch.smtp_pass;
+            else patch.smtp_pass = p;
+        }
+        if (patch.smtp_reply_to && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(patch.smtp_reply_to)) {
+            return res.status(422).json({ message: 'Adresse de réponse invalide.' });
+        }
+        if (patch.internal_recipients !== undefined) {
+            if (!Array.isArray(patch.internal_recipients)) {
+                return res.status(422).json({ message: 'internal_recipients doit être un tableau.' });
+            }
+            const bad = patch.internal_recipients.find(m => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(m));
+            if (bad) return res.status(422).json({ message: `Destinataire interne invalide : ${bad}` });
         }
 
         // accent_default est une référence figée : on refuse toute écriture
@@ -414,29 +435,48 @@ exports.updateTemplate = async (req, res) => {
 
 // POST /api/settings/test-email
 exports.testEmail = async (req, res) => {
+    const to = req.body.to || req.user.email;
     try {
-        const to = req.body.to || req.user.email;
+        // 1. Connexion vérifiée AVANT tout envoi : l'erreur est alors explicite
+        const cfg = await verifyTransport();
+
         const s = await Setting.all();
         const transporter = await getTransporter();
 
         await transporter.sendMail({
             from: await getFrom(),
             to,
+            replyTo: await getReplyTo(),
             subject: `Test de configuration — ${s.site_name || 'NetandProEvents'}`,
             html: await wrap('Configuration SMTP validée', 'Email de test',
                 `<p>Cet email confirme que le serveur d'envoi est correctement configuré.</p>
                  <table style="font-size:14px;color:#64748b">
-                   <tr><td>Hôte</td><td><strong>${s.smtp_host}:${s.smtp_port}</strong></td></tr>
-                   <tr><td>Expéditeur</td><td><strong>${s.smtp_user}</strong></td></tr>
+                   <tr><td style="padding-right:12px">Hôte</td><td><strong>${cfg.host}:${cfg.port}</strong></td></tr>
+                   <tr><td style="padding-right:12px">Expéditeur</td><td><strong>${cfg.user}</strong></td></tr>
+                   <tr><td style="padding-right:12px">Adresse de réponse</td><td><strong>${s.smtp_reply_to || '—'}</strong></td></tr>
                  </table>`)
         });
 
         await backup.log('test_email', `envoyé à ${to}`, req.user.id);
+        await logMail('test', null, to, 'envoye');
         res.json({ success: true, message: `Email de test envoyé à ${to}` });
     } catch (error) {
-        console.error('Erreur testEmail:', error);
-        await backup.log('test_email', error.message, req.user.id, 'echec').catch(() => {});
-        res.status(500).json({ message: `Échec de l'envoi : ${error.message}` });
+        const { status, message } = describeMailError(error);
+        console.error('Erreur testEmail:', error.code || '', error.message);
+        await backup.log('test_email', `${error.code || 'ERR'} — ${error.message}`, req.user.id, 'echec').catch(() => {});
+        await logMail('test', null, to, 'echec', (error.code || '') + ' ' + error.message);
+        res.status(status).json({ success: false, code: error.code || null, message });
+    }
+};
+
+// GET /api/settings/verify-smtp
+exports.verifySmtp = async (req, res) => {
+    try {
+        const cfg = await verifyTransport();
+        res.json({ success: true, message: `Connexion établie avec ${cfg.host}:${cfg.port} (${cfg.user})`, ...cfg });
+    } catch (error) {
+        const { status, message } = describeMailError(error);
+        res.status(status).json({ success: false, code: error.code || null, message });
     }
 };
 

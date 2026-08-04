@@ -20,20 +20,26 @@ class Testimonial {
     }
 
     // Site public : publiés, non expirés (ou conservés), mis en avant d'abord
-    static async getPublic() {
+    // Site public : publiés, non expirés (ou conservés), filtrés par les
+    // paramètres Site public (note minimale, nombre affiché).
+    static async getPublic({ minRating = 0, limit = 0 } = {}) {
+        const min = Math.min(5, Math.max(0, Number(minRating) || 0));
+        const lim = Math.min(50, Math.max(0, parseInt(limit, 10) || 0));
+
         const [rows] = await pool.execute(`
             SELECT t.id, t.client_name, t.comment, t.rating, t.is_featured, t.created_at
             FROM testimonials t
             WHERE t.status = 'publie'
               AND (t.keep_forever = TRUE OR t.created_at >= DATE_SUB(NOW(), INTERVAL ${LIFE_MONTHS} MONTH))
+              ${min ? 'AND t.rating IS NOT NULL AND t.rating >= ?' : ''}
             ORDER BY t.is_featured DESC, t.created_at DESC
-        `);
+            ${lim ? `LIMIT ${lim}` : ''}
+        `, min ? [min] : []);
         return rows;
     }
 
-    // Compatibilité avec l'ancien endpoint
-    static async getRecent() {
-        return this.getPublic();
+    static async getRecent(opts) {
+        return this.getPublic(opts);
     }
 
     // Liste admin : statut + recherche + tri

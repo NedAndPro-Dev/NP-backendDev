@@ -1,8 +1,19 @@
 const Testimonial = require('../models/Testimonial');
+const Setting = require('../models/Setting');
 
 // ── Public ─────────────────────────────────────────────────────────────
 exports.createTestimonial = async (req, res) => {
     try {
+        // Site public › « Formulaire de témoignage ouvert »
+        const open = await Setting.get('review_form_open', true);
+        if (!open) {
+            return res.status(403).json({
+                success: false,
+                closed: true,
+                message: 'Le dépôt de témoignages est momentanément fermé. Nous vous inviterons à donner votre avis après votre événement.'
+            });
+        }
+
         const { clientName, clientEmail, comment, rating, eventId } = req.body;
 
         if (!clientName || !comment) {
@@ -29,8 +40,16 @@ exports.createTestimonial = async (req, res) => {
 };
 
 exports.getRecentTestimonials = async (req, res) => {
-    try { res.json(await Testimonial.getPublic()); }
-    catch (e) { console.error(e); res.status(500).json({ message: 'Erreur serveur' }); }
+    try {
+        const s = await Setting.all();
+        res.json(await Testimonial.getPublic({
+            minRating: s.reviews_min_rating,
+            limit: s.reviews_count
+        }));
+    } catch (e) {
+        console.error('Erreur témoignages publics:', e);
+        res.status(500).json({ message: 'Erreur serveur' });
+    }
 };
 
 // ── Admin ──────────────────────────────────────────────────────────────

@@ -50,6 +50,7 @@ router.delete('/services/:id', c.removeService);
 router.get('/templates/:key', c.getTemplate);
 router.patch('/templates/:key', c.updateTemplate);
 router.post('/test-email', c.testEmail);
+router.get('/verify-smtp', c.verifySmtp);
 
 router.get('/health', c.health);
 router.get('/maintenance-log', c.maintenanceLog);

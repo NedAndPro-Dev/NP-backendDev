@@ -4,46 +4,25 @@ class Event {
     // Créer un événement
     static async create(eventData) {
         const {
-            clientName,
-            clientEmail,
-            clientPhone,
-            companyName,
-            dateStart,
-            dateEnd,
-            locationId,
-            services,
-            paymentMethod,
-            notes,
-            conditionsAccepted,
-            attendees,
-            status
+            clientName, clientEmail, clientPhone, companyName,
+            dateStart, dateEnd, locationId, services, paymentMethod,
+            notes, conditionsAccepted, attendees, status, isWaitlisted
         } = eventData;
 
         // S'assurer que services est un tableau
         const servicesArray = Array.isArray(services) ? services : [];
 
-        const query = `
+        const [result] = await pool.execute(`
             INSERT INTO events (
                 client_name, client_email, client_phone, company_name,
                 date_start, date_end, location_id, services,
-                payment_method, notes, conditions_accepted, attendees, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `;
-
-        const [result] = await pool.execute(query, [
-            clientName,
-            clientEmail,
-            clientPhone,
-            companyName || null,
-            dateStart,
-            dateEnd,
-            locationId,
-            JSON.stringify(servicesArray), // Toujours convertir en JSON
-            paymentMethod,
-            notes || null,
-            conditionsAccepted ? 1 : 0,
-            attendees ?? null,
-            status || 'En attente'
+                payment_method, notes, conditions_accepted, attendees, status, is_waitlisted
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `, [
+            clientName, clientEmail, clientPhone, companyName || null,
+            dateStart, dateEnd, locationId, JSON.stringify(servicesArray),
+            paymentMethod, notes || null, conditionsAccepted ? 1 : 0,
+            attendees ?? null, status || 'En attente', isWaitlisted ? 1 : 0
         ]);
 
         return result.insertId;
@@ -157,10 +136,14 @@ class Event {
         };
     }
 
-    // Mettre à jour le statut
-    static async updateStatus(id, status) {
-        const query = 'UPDATE events SET status = ? WHERE id = ?';
-        const [result] = await pool.execute(query, [status, id]);
+    // Mettre à jour le statut. Confirmer une demande la sort de la liste d'attente.
+    static async updateStatus(id, status, { clearWaitlist = false } = {}) {
+        const [result] = await pool.execute(
+            clearWaitlist
+                ? 'UPDATE events SET status = ?, is_waitlisted = 0 WHERE id = ?'
+                : 'UPDATE events SET status = ? WHERE id = ?',
+            [status, id]
+        );
         return result.affectedRows > 0;
     }
 

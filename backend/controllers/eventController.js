@@ -1,6 +1,10 @@
 const pool = require('../config/database');
 const Event = require('../models/Event');
-const { checkBookingRules, checkRequiredFields, defaultStatus, autoConfirm } = require('../services/settingsGuard');
+const {
+    checkBookingRules, checkRequiredFields, checkCancellation,
+    defaultStatus, autoConfirm, waitlistEnabled, cancelPolicy
+} = require('../services/settingsGuard');
+const { onBookingCreated, onStatusChanged } = require('../services/mailEvents');
 
 /**
  * L'API publique reçoit du camelCase (dateStart, locationId...), tandis que
@@ -36,6 +40,28 @@ const createEvent = async (req, res) => {
 
         // Règles de réservation : préavis, durée, fermetures, quotas, capacité
         const rules = await checkBookingRules(payload);
+
+        // Salle prise : si la liste d'attente est active, on la propose (409)
+        // puis on accepte la demande quand le client l'accepte.
+        if (!rules.ok && rules.waitlist && await waitlistEnabled()) {
+            if (!req.body.acceptWaitlist) {
+                return res.status(409).json({
+                    success: false,
+                    waitlistAvailable: true,
+                    message: rules.message
+                });
+            }
+            const waitId = await Event.create({ ...req.body, status: 'En attente', isWaitlisted: true });
+            onBookingCreated(await Event.getById(waitId), { waitlisted: true });   // non bloquant
+            return res.status(201).json({
+                success: true,
+                waitlisted: true,
+                message: 'Vous êtes inscrit en liste d\'attente : nous vous contactons dès qu\'une place se libère.',
+                eventId: waitId,
+                cancellationPolicy: await cancelPolicy()
+            });
+        }
+
         if (!rules.ok) {
             return res.status(422).json({ success: false, message: rules.message });
         }
@@ -44,13 +70,15 @@ const createEvent = async (req, res) => {
         // le statut envoyé par le client est ignoré : sinon n'importe quel
         // visiteur confirmerait lui-même sa réservation.
         const status = (await autoConfirm()) ? 'Confirmé' : await defaultStatus();
-
         const eventId = await Event.create({ ...req.body, status });
+        onBookingCreated(await Event.getById(eventId));                            // non bloquant
 
         res.status(201).json({
             success: true,
             message: 'Événement créé avec succès',
-            eventId
+            eventId,
+            status,
+            cancellationPolicy: await cancelPolicy()
         });
     } catch (error) {
         console.error('Erreur création événement:', error);
@@ -163,13 +191,26 @@ const updateEvent = async (req, res) => {
 const updateEventStatus = async (req, res) => {
     try {
         const { status } = req.body;
-        const updated = await Event.updateStatus(req.params.id, status);
+        const event = await Event.getById(req.params.id);
+        if (!event) return res.status(404).json({ message: 'Événement non trouvé' });
 
-        if (!updated) {
-            return res.status(404).json({ message: 'Événement non trouvé' });
-        }
+        // resa.cancel_lead_days : informe de la retenue d'acompte
+        let cancellation = null;
+        if (status === 'Annulé') cancellation = await checkCancellation(event);
 
-        res.json({ success: true, message: 'Statut mis à jour' });
+        const updated = await Event.updateStatus(req.params.id, status, {
+            clearWaitlist: status === 'Confirmé'
+        });
+        if (!updated) return res.status(404).json({ message: 'Événement non trouvé' });
+
+        const mail = await onStatusChanged(event, status, cancellation);
+
+        res.json({
+            success: true,
+            message: cancellation ? `Statut mis à jour. ${cancellation.message}` : 'Statut mis à jour',
+            cancellation,
+            email: mail && mail.sent ? 'envoyé' : (mail && mail.reason) || null
+        });
     } catch (error) {
         console.error('Erreur mise à jour statut:', error);
         res.status(500).json({ message: 'Erreur serveur' });

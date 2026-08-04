@@ -18,6 +18,7 @@ const path = require('path');
 const settingsRoutes = require('./routes/settingsRoutes');
 const maintenanceMode = require('./middleware/maintenanceMode');
 require('./services/autoBackup').start();
+require('./services/mailScheduler').start();
 
 require('./utils/cleanupTestimonials');
 
