@@ -1,10 +1,51 @@
 const pool = require('../config/database');
 const Event = require('../models/Event');
+const { checkBookingRules, checkRequiredFields, defaultStatus, autoConfirm } = require('../services/settingsGuard');
+
+/**
+ * L'API publique reçoit du camelCase (dateStart, locationId...), tandis que
+ * settingsGuard et le paramètre required_fields raisonnent en noms de
+ * colonnes (date_start, location_id...). Sans cette traduction, les gardes
+ * ne voient que des undefined et rejettent toute demande valide.
+ */
+const toColumnNames = (b) => ({
+    client_name: b.clientName,
+    client_email: b.clientEmail,
+    client_phone: b.clientPhone,
+    company_name: b.companyName,
+    date_start: b.dateStart,
+    date_end: b.dateEnd,
+    location_id: b.locationId,
+    payment_method: b.paymentMethod,
+    conditions_accepted: b.conditionsAccepted,
+    attendees: b.attendees,
+    services: b.services,
+    notes: b.notes
+});
 
 // Créer un événement
 const createEvent = async (req, res) => {
     try {
-        const eventId = await Event.create(req.body);
+        const payload = toColumnNames(req.body);
+
+        // Champs obligatoires configurés en back-office
+        const fieldsCheck = await checkRequiredFields(payload);
+        if (!fieldsCheck.ok) {
+            return res.status(422).json({ success: false, message: fieldsCheck.message });
+        }
+
+        // Règles de réservation : préavis, durée, fermetures, quotas, capacité
+        const rules = await checkBookingRules(payload);
+        if (!rules.ok) {
+            return res.status(422).json({ success: false, message: rules.message });
+        }
+
+        // Statut initial piloté par les paramètres. La route étant publique,
+        // le statut envoyé par le client est ignoré : sinon n'importe quel
+        // visiteur confirmerait lui-même sa réservation.
+        const status = (await autoConfirm()) ? 'Confirmé' : await defaultStatus();
+
+        const eventId = await Event.create({ ...req.body, status });
 
         res.status(201).json({
             success: true,

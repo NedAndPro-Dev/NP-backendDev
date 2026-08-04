@@ -14,7 +14,9 @@ class Event {
             services,
             paymentMethod,
             notes,
-            conditionsAccepted
+            conditionsAccepted,
+            attendees,
+            status
         } = eventData;
 
         // S'assurer que services est un tableau
@@ -24,8 +26,8 @@ class Event {
             INSERT INTO events (
                 client_name, client_email, client_phone, company_name,
                 date_start, date_end, location_id, services,
-                payment_method, notes, conditions_accepted, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'En attente')
+                payment_method, notes, conditions_accepted, attendees, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `;
 
         const [result] = await pool.execute(query, [
@@ -39,7 +41,9 @@ class Event {
             JSON.stringify(servicesArray), // Toujours convertir en JSON
             paymentMethod,
             notes || null,
-            conditionsAccepted ? 1 : 0
+            conditionsAccepted ? 1 : 0,
+            attendees ?? null,
+            status || 'En attente'
         ]);
 
         return result.insertId;

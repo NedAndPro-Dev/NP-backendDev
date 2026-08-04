@@ -14,6 +14,11 @@ const contactRoutes = require('./routes/contactRoutes');
 const userRoutes = require('./routes/userRoutes');
 const { mountApiDocs } = require('./docs/swagger');
 
+const path = require('path');
+const settingsRoutes = require('./routes/settingsRoutes');
+const maintenanceMode = require('./middleware/maintenanceMode');
+require('./services/autoBackup').start();
+
 require('./utils/cleanupTestimonials');
 
 const app = express();
@@ -32,6 +37,7 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(maintenanceMode);
 app.use(express.urlencoded({ extended: true }));
 
 // Header de sécurité : Empêcher l'indexation des pages admin
@@ -41,6 +47,9 @@ app.use((req, res, next) => {
     }
     next();
 });
+
+// Servir les fichiers déposés (logo, favicon)
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // Routes API
 app.get('/api/health', (req, res) => {
@@ -55,6 +64,7 @@ app.use('/api/stats', statsRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/contact-messages', contactRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/settings', settingsRoutes);
 
 mountApiDocs(app);
 
