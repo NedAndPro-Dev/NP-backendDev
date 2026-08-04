@@ -36,4 +36,5 @@ const authMiddleware = (req, res, next) => {
     }
 };
 
+// Les gardes par rôle vivent dans middleware/roleMiddleware.js
 module.exports = authMiddleware;
