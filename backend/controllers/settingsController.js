@@ -78,11 +78,17 @@ exports.getPublic = async (req, res) => {
                 dateFormat: s.date_format
             },
             contact: {
-                legalName: s.legal_name, address: s.address, phone: s.phone_main,
-                whatsapp: s.phone_whatsapp, email: s.email_contact, bookings: s.email_bookings,
-                social: {
-                    facebook: s.social_facebook, instagram: s.social_instagram,
-                    linkedin: s.social_linkedin, tiktok: s.social_tiktok
+                legalName: s.legal_name, niu: s.niu, rccm: s.rccm, poBox: s.po_box,
+                address: s.address,
+                phone: s.phone_main, whatsapp: s.phone_whatsapp,
+                email: s.email_contact, bookingEmail: s.email_bookings,
+                manager: s.contact_manager,
+                showLegal: s.show_legal_footer !== false,
+                socials: {
+                    facebook: s.social_facebook || '',
+                    instagram: s.social_instagram || '',
+                    linkedin: s.social_linkedin || '',
+                    tiktok: s.social_tiktok || ''
                 }
             },
             booking: {
