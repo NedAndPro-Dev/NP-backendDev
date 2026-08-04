@@ -71,7 +71,9 @@ exports.getPublic = async (req, res) => {
         res.json({
             site: {
                 name: s.site_name, tagline: s.tagline, seo: s.seo_description,
-                logo: s.logo_url, favicon: s.favicon_url, accent: s.accent_color,
+                logo: s.logo_url, favicon: s.favicon_url,
+                accent: s.accent_color,
+                accentDefault: s.accent_default || '#1e40af',
                 currency: s.currency, language: s.language, timezone: s.timezone,
                 dateFormat: s.date_format
             },
@@ -145,6 +147,9 @@ exports.update = async (req, res) => {
         if (Array.isArray(patch.required_fields)) {
             patch.required_fields = Array.from(new Set([...patch.required_fields, 'client_name', 'client_email']));
         }
+
+        // accent_default est une référence figée : on refuse toute écriture
+        delete patch.accent_default;
 
         const { updated, ignored } = await Setting.setMany(patch, req.user.id);
 

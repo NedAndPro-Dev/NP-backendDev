@@ -48,8 +48,13 @@ app.use((req, res, next) => {
     next();
 });
 
-// Servir les fichiers déposés (logo, favicon)
-app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
+// Fichiers déposés (logo, favicon) accessibles publiquement.
+// Le dossier vit à la racine du dépôt, pas dans backend/ : c'est là que
+// multer écrit (routes/settingsRoutes.js).
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads'), {
+    maxAge: '7d',
+    setHeaders: (res) => res.set('Access-Control-Allow-Origin', '*')
+}));
 
 // Routes API
 app.get('/api/health', (req, res) => {
