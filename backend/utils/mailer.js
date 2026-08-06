@@ -1,5 +1,5 @@
 const nodemailer = require('nodemailer');
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 const Setting = require('../models/Setting');
 
 const MASK = '••••••••';
@@ -148,7 +148,7 @@ const paragraphs = (text) => String(text || '')
  * Renvoie { sent } ou { skipped, reason }.
  */
 const sendTemplate = async (key, vars = {}, { to, cc, attachments } = {}) => {
-    const [[tpl]] = await pool.execute('SELECT * FROM email_templates WHERE `key` = ?', [key]);
+    const tpl = await prisma.emailTemplate.findUnique({ where: { key } });
     if (!tpl) return { skipped: true, reason: `modèle « ${key} » introuvable` };
     if (!tpl.is_active) return { skipped: true, reason: 'modèle désactivé' };
     if (!to) return { skipped: true, reason: 'aucun destinataire' };
@@ -181,20 +181,31 @@ const sendRaw = async ({ to, cc, subject, title, subtitle, html }) => {
 
 // Journal des envois : sert aussi de garde anti-doublon pour les automatismes
 const logMail = async (kind, eventId, recipient, status = 'envoye', detail = null) => {
-    await pool.execute(
-        `INSERT INTO email_log (kind, event_id, recipient, status, detail)
-         VALUES (?, ?, ?, ?, ?)
-         ON DUPLICATE KEY UPDATE status = VALUES(status), detail = VALUES(detail)`,
-        [kind, eventId ?? null, String(recipient || '').slice(0, 190), status, detail]
-    ).catch(e => console.error('email_log:', e.message));
+    const data = { kind, event_id: eventId ?? null, recipient: String(recipient || '').slice(0, 190), status, detail };
+    try {
+        // ON DUPLICATE KEY UPDATE devient un upsert sur la clé (kind, event_id).
+        // event_id NULL n'entre dans aucune contrainte d'unicité — ni en MySQL
+        // ni en PostgreSQL — donc les envois hors événement s'empilent, comme
+        // avant : c'est voulu, chaque test d'email doit laisser sa trace.
+        if (eventId === null || eventId === undefined) {
+            await prisma.emailLog.create({ data });
+        } else {
+            await prisma.emailLog.upsert({
+                where: { kind_event_id: { kind, event_id: eventId } },
+                update: { status, detail },
+                create: data
+            });
+        }
+    } catch (e) {
+        console.error('email_log:', e.message);
+    }
 };
 
 const alreadySent = async (kind, eventId) => {
-    const [rows] = await pool.execute(
-        "SELECT id FROM email_log WHERE kind = ? AND event_id = ? AND status = 'envoye' LIMIT 1",
-        [kind, eventId]
-    );
-    return rows.length > 0;
+    const n = await prisma.emailLog.count({
+        where: { kind, event_id: eventId, status: 'envoye' }
+    });
+    return n > 0;
 };
 
 const replyTemplate = async ({ name, subject, body }) => wrap(

@@ -1,26 +1,49 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 const Setting = require('../models/Setting');
 const { sendTemplate, logMail, alreadySent } = require('../utils/mailer');
 const { eventVars } = require('./mailEvents');
 
 const HOUR = 3600000;
 
-const withLocation = `
-    SELECT e.*, CONCAT(
-        COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-        IF(l.parent_id IS NOT NULL, ' - ', ''), l.name
-    ) AS location_name
-    FROM events e LEFT JOIN locations l ON l.id = e.location_id
-`;
+/**
+ * Événements d'un jour donné, avec le nom composé de la salle.
+ *
+ * Remplace le SELECT … CONCAT partagé : `champ` vaut date_start pour les
+ * rappels, date_end pour les demandes d'avis. Les comparaisons portaient
+ * sur DATE(...) côté MySQL, donc sur la journée entière — d'où les bornes.
+ */
+const evenementsDuJour = async (champ, date, filtres = {}) => {
+    const jour = date.toISOString().split('T')[0];
+    const rows = await prisma.event.findMany({
+        where: {
+            status: 'Confirmé',
+            ...filtres,
+            [champ]: {
+                gte: new Date(`${jour}T00:00:00`),
+                lte: new Date(`${jour}T23:59:59.999`)
+            }
+        },
+        include: { location: { include: { parent: true } } }
+    });
+    return rows.map(({ location, ...e }) => ({
+        ...e,
+        location_name: location
+            ? (location.parent ? `${location.parent.name} - ${location.name}` : location.name)
+            : null
+    }));
+};
+
+const dans = (jours) => {
+    const d = new Date();
+    d.setDate(d.getDate() + jours);
+    return d;
+};
 
 /** notif.reminder_days : rappel avant l'événement */
 const runReminders = async () => {
     const days = Number(await Setting.get('reminder_days', 0)) || 0;
     if (!days) return 0;
-    const [rows] = await pool.execute(
-        `${withLocation} WHERE e.status = 'Confirmé' AND e.is_waitlisted = 0
-           AND DATE(e.date_start) = DATE_ADD(CURDATE(), INTERVAL ? DAY)`, [days]
-    );
+    const rows = await evenementsDuJour('date_start', dans(days), { is_waitlisted: false });
     let n = 0;
     for (const ev of rows) {
         if (await alreadySent('remind', ev.id)) continue;
@@ -40,10 +63,7 @@ const runReviewRequests = async () => {
     const days = Number(await Setting.get('review_request_days', 0)) || 0;
     if (!days) return 0;
     const base = process.env.PUBLIC_URL || process.env.CORS_ORIGIN || 'http://localhost:3000';
-    const [rows] = await pool.execute(
-        `${withLocation} WHERE e.status = 'Confirmé'
-           AND DATE(e.date_end) = DATE_SUB(CURDATE(), INTERVAL ? DAY)`, [days]
-    );
+    const rows = await evenementsDuJour('date_end', dans(-days));
     let n = 0;
     for (const ev of rows) {
         if (await alreadySent('review', ev.id)) continue;

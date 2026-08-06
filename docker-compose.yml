@@ -1,0 +1,40 @@
+# Base de données PostgreSQL de NetandProEvents.
+#
+# Port hôte 5434 : 5432 et 5433 sont déjà pris sur ce poste (dont une
+# instance appartenant à un autre projet). L'isolement est volontaire —
+# chaque projet a son conteneur et son volume.
+#
+#   docker compose up -d        démarrer
+#   docker compose logs -f db   suivre le journal
+#   docker compose down         arrêter (les données survivent)
+#   docker compose down -v      arrêter ET effacer les données
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: netandpro_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-netandpro}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-netandpro_dev}
+      POSTGRES_DB: ${POSTGRES_DB:-netandpro}
+      # Le tri par défaut de l'image est C ; on force une collation
+      # linguistique pour que ORDER BY name range correctement les
+      # accents (« Événements » avant « Fermeture »).
+      LANG: fr_FR.UTF-8
+    ports:
+      - "5434:5432"
+    volumes:
+      - netandpro_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      # pg_isready seul ment : il répond OK pendant l'initialisation.
+      # On interroge réellement la base cible.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-netandpro} -d ${POSTGRES_DB:-netandpro} -q"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  netandpro_pgdata:
+    name: netandpro_pgdata

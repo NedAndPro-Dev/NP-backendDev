@@ -1,0 +1,346 @@
+// Schéma PostgreSQL de NetandProEvents.
+//
+// ── Deux conventions volontaires, contraires à l'idiome Prisma ────────────
+//
+// 1. Les champs scalaires portent le nom exact des colonnes (snake_case)
+//    plutôt que le camelCase habituel. Les contrôleurs renvoient aujourd'hui
+//    des lignes SQL telles quelles (`res.json(await Event.getAll())`), et le
+//    frontend lit `client_name`, `date_start`, `is_featured`… Renommer en
+//    camelCase aurait imposé une couche de traduction dans chaque endpoint,
+//    donc autant de risques de rupture. Ici, `prisma.event.findMany()` rend
+//    exactement les mêmes clés que `SELECT * FROM events`.
+//
+// 2. Les jeux de valeurs fermés sont du texte contraint par CHECK, et non
+//    des enum. Plusieurs contiennent espaces et accents — « En attente »,
+//    « Club privé », « par jour » — que Prisma ne peut pas exprimer en
+//    identifiant d'enum. Il aurait fallu @map, or le client Prisma renvoie
+//    le NOM de la valeur, pas sa correspondance en base : le frontend aurait
+//    reçu « EN_ATTENTE » au lieu de « En attente ». Les CHECK sont posés par
+//    la migration 20260806000001_value_constraints.
+//
+// Les contraintes de valeurs sont donc en base, pas dans ce fichier :
+// consulter cette migration avant d'ajouter un statut ou un moyen de paiement.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Prisma 7 : l'URL ne vit plus ici mais dans prisma.config.js pour la CLI,
+// et dans l'adaptateur passé à PrismaClient pour l'exécution (config/prisma.js).
+datasource db {
+  provider = "postgresql"
+}
+
+// ── Comptes ──────────────────────────────────────────────────────────────
+
+model User {
+  id                   Int       @id @default(autoincrement())
+  email                String    @unique @db.VarChar(255)
+  password_hash        String    @db.VarChar(255)
+  password_expiration  DateTime  @db.Date
+  created_at           DateTime? @default(now()) @db.Timestamp(6)
+  name                 String?   @db.VarChar(150)
+  phone                String?   @db.VarChar(50)
+  /// super_admin | superviseur
+  role                 String    @default("superviseur") @db.VarChar(40)
+  is_active            Boolean   @default(true)
+  twofa_enabled        Boolean   @default(false)
+  must_change_password Boolean   @default(false)
+  last_login_at        DateTime? @db.Timestamp(6)
+  created_by           Int?
+  updated_at           DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+
+  creator        User?            @relation("UserCreator", fields: [created_by], references: [id], onDelete: SetNull)
+  created_users  User[]           @relation("UserCreator")
+  settings       AppSetting[]
+  audit_entries  AuditLog[]
+  maintenance    MaintenanceLog[]
+  replies        MessageReply[]
+  moderated      Testimonial[]
+
+  @@index([role])
+  @@index([is_active])
+  @@index([created_by])
+  @@map("users")
+}
+
+model PasswordResetCode {
+  id         Int       @id @default(autoincrement())
+  email      String    @db.VarChar(255)
+  code_hash  String    @db.VarChar(255)
+  expires_at DateTime  @db.Timestamp(6)
+  used       Boolean?  @default(false)
+  attempts   Int?      @default(0)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([email])
+  @@index([expires_at])
+  @@map("password_reset_codes")
+}
+
+// ── Lieux et réservations ────────────────────────────────────────────────
+
+model Location {
+  id            Int       @id @default(autoincrement())
+  name          String    @db.VarChar(255)
+  parent_id     Int?
+  created_at    DateTime? @default(now()) @db.Timestamp(6)
+  description   String?
+  /// actif | inactif | archive
+  status        String    @default("actif") @db.VarChar(20)
+  updated_at    DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+  /// Hôtel | Club privé | Centre de congrès | Salle des fêtes | Autre
+  type          String?   @db.VarChar(40)
+  address       String?   @db.VarChar(255)
+  city          String?   @db.VarChar(120)
+  quartier      String?   @db.VarChar(120)
+  latitude      Decimal?  @db.Decimal(10, 7)
+  longitude     Decimal?  @db.Decimal(10, 7)
+  contact_name  String?   @db.VarChar(150)
+  contact_phone String?   @db.VarChar(50)
+  contact_email String?   @db.VarChar(190)
+  website       String?   @db.VarChar(255)
+  logo_url      String?   @db.VarChar(255)
+  capacity      Int?
+  surface       Decimal?  @db.Decimal(8, 2)
+  floor         String?   @db.VarChar(50)
+  layouts       Json?
+  equipment     Json?
+  price_per_day Decimal?  @db.Decimal(12, 2)
+  currency      String    @default("XAF") @db.Char(3)
+  is_bookable   Boolean   @default(true)
+  plan_url      String?   @db.VarChar(255)
+
+  parent   Location?  @relation("LocationTree", fields: [parent_id], references: [id], onDelete: Cascade)
+  children Location[] @relation("LocationTree")
+  events   Event[]
+
+  @@unique([parent_id, name], map: "uniq_name_parent")
+  @@index([parent_id])
+  @@index([status])
+  @@map("locations")
+}
+
+model Event {
+  id                  Int       @id @default(autoincrement())
+  client_name         String    @db.VarChar(255)
+  title               String?   @db.VarChar(255)
+  client_email        String    @db.VarChar(255)
+  client_phone        String?   @db.VarChar(50)
+  company_name        String?   @db.VarChar(255)
+  date_start          DateTime  @db.Timestamp(6)
+  date_end            DateTime  @db.Timestamp(6)
+  location_id         Int
+  services            Json
+  /// Virement bancaire | Espèces | MTN Mobile Money | Orange Money | Chèque
+  payment_method      String    @db.VarChar(40)
+  conditions_accepted Boolean?  @default(false)
+  /// En attente | Confirmé | Annulé
+  status              String?   @default("En attente") @db.VarChar(20)
+  is_waitlisted       Boolean   @default(false)
+  notes               String?
+  created_at          DateTime? @default(now()) @db.Timestamp(6)
+  attendees           Int?
+  updated_at          DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+
+  location     Location      @relation(fields: [location_id], references: [id])
+  testimonials Testimonial[]
+
+  @@index([date_start])
+  @@index([status, date_start])
+  @@index([client_email])
+  @@index([location_id, is_waitlisted])
+  @@map("events")
+}
+
+model Testimonial {
+  id           Int       @id @default(autoincrement())
+  client_name  String    @db.VarChar(255)
+  comment      String
+  created_at   DateTime? @default(now()) @db.Timestamp(6)
+  rating       Int?      @db.SmallInt
+  /// en_attente | publie | masque
+  status       String    @default("en_attente") @db.VarChar(20)
+  is_featured  Boolean   @default(false)
+  keep_forever Boolean   @default(false)
+  event_id     Int?
+  client_email String?   @db.VarChar(190)
+  moderated_at DateTime? @db.Timestamp(6)
+  moderated_by Int?
+
+  event     Event? @relation(fields: [event_id], references: [id], onDelete: SetNull)
+  moderator User?  @relation(fields: [moderated_by], references: [id], onDelete: SetNull)
+
+  @@index([event_id])
+  @@index([moderated_by])
+  @@index([status])
+  @@index([is_featured])
+  @@map("testimonials")
+}
+
+// ── Messagerie ───────────────────────────────────────────────────────────
+
+model ContactMessage {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(255)
+  email      String    @db.VarChar(255)
+  phone      String?   @db.VarChar(50)
+  subject    String    @db.VarChar(255)
+  message    String
+  /// nouveau | lu | traite
+  status     String?   @default("nouveau") @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  replied_at DateTime? @db.Timestamp(6)
+  read_at    DateTime? @db.Timestamp(6)
+
+  replies MessageReply[]
+
+  @@index([status])
+  @@index([created_at])
+  @@index([email])
+  @@map("contact_messages")
+}
+
+model MessageReply {
+  id          Int       @id @default(autoincrement())
+  message_id  Int
+  admin_id    Int?
+  admin_email String?   @db.VarChar(190)
+  body        String
+  sent_at     DateTime? @default(now()) @db.Timestamp(6)
+
+  message ContactMessage @relation(fields: [message_id], references: [id], onDelete: Cascade)
+  admin   User?          @relation(fields: [admin_id], references: [id], onDelete: SetNull)
+
+  @@index([admin_id])
+  @@index([message_id])
+  @@map("message_replies")
+}
+
+// ── Paramétrage ──────────────────────────────────────────────────────────
+
+model AppSetting {
+  key        String    @id @db.VarChar(80)
+  value      String?
+  /// string | int | float | bool | json
+  type       String    @default("string") @db.VarChar(10)
+  group_key  String    @db.VarChar(40)
+  is_secret  Boolean   @default(false)
+  updated_by Int?
+  updated_at DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+
+  editor User? @relation(fields: [updated_by], references: [id], onDelete: SetNull)
+
+  @@index([group_key])
+  @@index([updated_by])
+  @@map("app_settings")
+}
+
+model BusinessHour {
+  weekday  Int      @id @db.SmallInt
+  is_open  Boolean  @default(true)
+  open_at  DateTime @default(dbgenerated("'08:00:00'::time without time zone")) @db.Time(0)
+  close_at DateTime @default(dbgenerated("'19:00:00'::time without time zone")) @db.Time(0)
+
+  @@map("business_hours")
+}
+
+model Closure {
+  id         Int       @id @default(autoincrement())
+  label      String    @db.VarChar(150)
+  date_from  DateTime  @db.Date
+  date_to    DateTime  @db.Date
+  /// Férié | Technique | Autre
+  kind       String    @default("Férié") @db.VarChar(20)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@index([date_from, date_to])
+  @@map("closures")
+}
+
+model ServiceCatalog {
+  id         Int       @id @default(autoincrement())
+  name       String    @unique(map: "uq_service_name") @db.VarChar(120)
+  price      Decimal   @default(0) @db.Decimal(12, 2)
+  /// forfait | par jour | par personne | par heure
+  unit       String    @default("forfait") @db.VarChar(20)
+  is_active  Boolean   @default(true)
+  sort_order Int       @default(0)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@map("service_catalog")
+}
+
+model EmailTemplate {
+  key        String    @id @db.VarChar(40)
+  label      String    @db.VarChar(120)
+  subject    String    @db.VarChar(200)
+  body       String
+  is_active  Boolean   @default(true)
+  updated_at DateTime? @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@map("email_templates")
+}
+
+// ── Journaux ─────────────────────────────────────────────────────────────
+
+model EmailLog {
+  id         Int       @id @default(autoincrement())
+  kind       String    @db.VarChar(40)
+  event_id   Int?
+  recipient  String    @db.VarChar(190)
+  /// envoye | echec | ignore
+  status     String    @default("envoye") @db.VarChar(10)
+  detail     String?   @db.VarChar(255)
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  @@unique([kind, event_id], map: "uq_kind_event")
+  @@index([kind, created_at])
+  @@map("email_log")
+}
+
+model MaintenanceLog {
+  id         Int       @id @default(autoincrement())
+  action     String    @db.VarChar(60)
+  detail     String?   @db.VarChar(255)
+  /// succes | echec
+  status     String    @default("succes") @db.VarChar(10)
+  user_id    Int?
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([action, created_at])
+  @@index([user_id])
+  @@map("maintenance_log")
+}
+
+model AuditLog {
+  id          Int       @id @default(autoincrement())
+  /// param | resa | moder | systeme | email | acces | contenu | users
+  category    String    @db.VarChar(20)
+  action      String    @db.VarChar(120)
+  target      String?   @db.VarChar(190)
+  detail      String?   @db.VarChar(500)
+  /// succes | echec | attention
+  status      String    @default("succes") @db.VarChar(10)
+  changes     Json?
+  user_id     Int?
+  actor_name  String?   @db.VarChar(120)
+  actor_email String?   @db.VarChar(190)
+  actor_role  String?   @db.VarChar(40)
+  ip          String?   @db.VarChar(64)
+  user_agent  String?   @db.VarChar(255)
+  method      String?   @db.VarChar(8)
+  path        String?   @db.VarChar(190)
+  http_status Int?      @db.SmallInt
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+
+  user User? @relation(fields: [user_id], references: [id], onDelete: SetNull)
+
+  @@index([created_at])
+  @@index([category, created_at])
+  @@index([user_id, created_at])
+  @@map("audit_log")
+}

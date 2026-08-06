@@ -1,4 +1,4 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 
 const SECRET_MASK = '••••••••';
 
@@ -33,7 +33,9 @@ class Setting {
     // Toutes les valeurs réelles, secrets inclus — usage interne (mailer, règles)
     static async all() {
         if (this._cache) return this._cache;
-        const [rows] = await pool.execute('SELECT `key`, `value`, `type` FROM app_settings');
+        const rows = await prisma.appSetting.findMany({
+            select: { key: true, value: true, type: true }
+        });
         const out = {};
         rows.forEach(r => { out[r.key] = decode(r); });
         this._cache = out;
@@ -47,9 +49,10 @@ class Setting {
 
     // Vue admin : groupée, secrets masqués
     static async grouped() {
-        const [rows] = await pool.execute(
-            'SELECT `key`, `value`, `type`, `group_key`, is_secret, updated_at FROM app_settings ORDER BY `group_key`, `key`'
-        );
+        const rows = await prisma.appSetting.findMany({
+            select: { key: true, value: true, type: true, group_key: true, is_secret: true, updated_at: true },
+            orderBy: [{ group_key: 'asc' }, { key: 'asc' }]
+        });
         const groups = {};
         let lastUpdate = null;
 
@@ -69,46 +72,39 @@ class Setting {
         const keys = Object.keys(patch);
         if (!keys.length) return { updated: 0, ignored: [] };
 
-        const placeholders = keys.map(() => '?').join(',');
-        const [known] = await pool.execute(
-            `SELECT \`key\`, \`type\`, is_secret FROM app_settings WHERE \`key\` IN (${placeholders})`,
-            keys
-        );
+        const known = await prisma.appSetting.findMany({
+            where: { key: { in: keys } },
+            select: { key: true, type: true, is_secret: true }
+        });
         const meta = new Map(known.map(r => [r.key, r]));
         const ignored = keys.filter(k => !meta.has(k));
 
-        const conn = await pool.getConnection();
-        try {
-            await conn.beginTransaction();
-            let updated = 0;
+        const aEcrire = keys
+            .map(key => ({ key, m: meta.get(key) }))
+            .filter(({ key, m }) =>
+                // Clé inconnue ignorée ; un secret renvoyé masqué n'écrase
+                // pas la vraie valeur.
+                m && !(m.is_secret && patch[key] === SECRET_MASK));
 
-            for (const key of keys) {
-                const m = meta.get(key);
-                if (!m) continue;
-                // Un secret renvoyé masqué n'écrase pas la vraie valeur
-                if (m.is_secret && patch[key] === SECRET_MASK) continue;
+        // $transaction remplace le couple beginTransaction / commit :
+        // soit tous les paramètres sont enregistrés, soit aucun.
+        await prisma.$transaction(
+            aEcrire.map(({ key, m }) => prisma.appSetting.update({
+                where: { key },
+                data: { value: encode(patch[key], m.type), updated_by: userId }
+            }))
+        );
 
-                await conn.execute(
-                    'UPDATE app_settings SET `value` = ?, updated_by = ? WHERE `key` = ?',
-                    [encode(patch[key], m.type), userId, key]
-                );
-                updated++;
-            }
-
-            await conn.commit();
-            this.invalidate();
-            return { updated, ignored };
-        } catch (e) {
-            await conn.rollback();
-            throw e;
-        } finally {
-            conn.release();
-        }
+        this.invalidate();
+        return { updated: aEcrire.length, ignored };
     }
 
     static async resetGroup(groupKey) {
         // Remet à NULL : la valeur par défaut du code reprend la main
-        await pool.execute('UPDATE app_settings SET `value` = NULL WHERE `group_key` = ?', [groupKey]);
+        await prisma.appSetting.updateMany({
+            where: { group_key: groupKey },
+            data: { value: null }
+        });
         this.invalidate();
     }
 

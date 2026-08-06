@@ -1,41 +1,72 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 
 const LIFE_MONTHS = 3;
+
+const dateLimite = () => {
+    const d = new Date();
+    d.setMonth(d.getMonth() - LIFE_MONTHS);
+    return d;
+};
+
+// Reproduit le CONCAT SQL de la salle : « Site - Salle », ou « Site » seul.
+const nomLieu = (location) => {
+    if (!location) return null;
+    return location.parent ? `${location.parent.name} - ${location.name}` : location.name;
+};
+
+// GREATEST(0, 90 - DATEDIFF(CURDATE(), DATE(created_at)))
+const joursRestants = (created_at) => {
+    if (!created_at) return LIFE_MONTHS * 30;
+    const d = new Date(created_at);
+    const cree = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate());
+    const now = new Date();
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    const ecoules = Math.round((today - cree) / 86400000);
+    return Math.max(0, LIFE_MONTHS * 30 - ecoules);
+};
 
 class Testimonial {
     // Création publique : arrive en modération
     static async create({ clientName, clientEmail, comment, rating, eventId }) {
         const note = Number(rating);
-        const [result] = await pool.execute(`
-            INSERT INTO testimonials (client_name, client_email, comment, rating, event_id, status)
-            VALUES (?, ?, ?, ?, ?, 'en_attente')
-        `, [
-            clientName,
-            clientEmail || null,
-            comment,
-            Number.isInteger(note) && note >= 1 && note <= 5 ? note : null,
-            eventId ? Number(eventId) : null
-        ]);
-        return result.insertId;
+        const t = await prisma.testimonial.create({
+            data: {
+                client_name: clientName,
+                client_email: clientEmail || null,
+                comment,
+                rating: Number.isInteger(note) && note >= 1 && note <= 5 ? note : null,
+                event_id: eventId ? Number(eventId) : null,
+                status: 'en_attente'
+            },
+            select: { id: true }
+        });
+        return t.id;
     }
 
-    // Site public : publiés, non expirés (ou conservés), mis en avant d'abord
     // Site public : publiés, non expirés (ou conservés), filtrés par les
     // paramètres Site public (note minimale, nombre affiché).
     static async getPublic({ minRating = 0, limit = 0 } = {}) {
         const min = Math.min(5, Math.max(0, Number(minRating) || 0));
         const lim = Math.min(50, Math.max(0, parseInt(limit, 10) || 0));
 
-        const [rows] = await pool.execute(`
-            SELECT t.id, t.client_name, t.comment, t.rating, t.is_featured, t.created_at
-            FROM testimonials t
-            WHERE t.status = 'publie'
-              AND (t.keep_forever = TRUE OR t.created_at >= DATE_SUB(NOW(), INTERVAL ${LIFE_MONTHS} MONTH))
-              ${min ? 'AND t.rating IS NOT NULL AND t.rating >= ?' : ''}
-            ORDER BY t.is_featured DESC, t.created_at DESC
-            ${lim ? `LIMIT ${lim}` : ''}
-        `, min ? [min] : []);
-        return rows;
+        return prisma.testimonial.findMany({
+            where: {
+                status: 'publie',
+                OR: [
+                    { keep_forever: true },
+                    { created_at: { gte: dateLimite() } }
+                ],
+                // Une note minimale exclut aussi les témoignages sans note,
+                // comme le faisait « rating IS NOT NULL AND rating >= ? ».
+                ...(min ? { rating: { not: null, gte: min } } : {})
+            },
+            select: {
+                id: true, client_name: true, comment: true,
+                rating: true, is_featured: true, created_at: true
+            },
+            orderBy: [{ is_featured: 'desc' }, { created_at: 'desc' }],
+            ...(lim ? { take: lim } : {})
+        });
     }
 
     static async getRecent(opts) {
@@ -44,115 +75,113 @@ class Testimonial {
 
     // Liste admin : statut + recherche + tri
     static async list({ status = 'all', q = '', sort = 'recent', limit = 100, offset = 0 } = {}) {
-        const where = [];
-        const params = [];
-
-        if (['en_attente', 'publie', 'masque'].includes(status)) {
-            where.push('t.status = ?');
-            params.push(status);
-        }
+        const where = {};
+        if (['en_attente', 'publie', 'masque'].includes(status)) where.status = status;
         if (q) {
-            where.push('(t.client_name LIKE ? OR t.comment LIKE ?)');
-            params.push(`%${q}%`, `%${q}%`);
+            // Recherche insensible à la casse, comme l'était LIKE en
+            // collation utf8mb4_unicode_ci côté MySQL.
+            where.OR = [
+                { client_name: { contains: q, mode: 'insensitive' } },
+                { comment: { contains: q, mode: 'insensitive' } }
+            ];
         }
 
-        // LIMIT/OFFSET jamais en placeholders : MySQL renvoie ER_WRONG_ARGUMENTS
         const lim = Math.min(300, Math.max(1, parseInt(limit, 10) || 100));
         const off = Math.max(0, parseInt(offset, 10) || 0);
-        const order = sort === 'note'
-            ? 't.rating DESC, t.created_at DESC'
-            : 't.created_at DESC';
+        const orderBy = sort === 'note'
+            ? [{ rating: 'desc' }, { created_at: 'desc' }]
+            : [{ created_at: 'desc' }];
 
-        const [rows] = await pool.execute(`
-            SELECT t.*,
-                   e.client_name AS event_client,
-                   CONCAT(
-                       COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-                       IF(l.parent_id IS NOT NULL, ' - ', ''), l.name
-                   ) AS event_location,
-                   GREATEST(0, ${LIFE_MONTHS * 30} - DATEDIFF(CURDATE(), DATE(t.created_at))) AS days_left
-            FROM testimonials t
-            LEFT JOIN events e    ON e.id = t.event_id
-            LEFT JOIN locations l ON l.id = e.location_id
-            ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
-            ORDER BY ${order}
-            LIMIT ${lim} OFFSET ${off}
-        `, params);
+        const rows = await prisma.testimonial.findMany({
+            where,
+            include: {
+                event: {
+                    select: {
+                        client_name: true,
+                        location: { include: { parent: true } }
+                    }
+                }
+            },
+            orderBy,
+            take: lim,
+            skip: off
+        });
 
-        return rows.map(r => ({
-            ...r,
-            is_featured: !!r.is_featured,
-            keep_forever: !!r.keep_forever,
-            days_left: Number(r.days_left)
+        return rows.map(({ event, ...t }) => ({
+            ...t,
+            event_client: event ? event.client_name : null,
+            event_location: event ? nomLieu(event.location) : null,
+            days_left: joursRestants(t.created_at)
         }));
     }
 
     static async counts() {
-        const [rows] = await pool.execute(`
-            SELECT
-                COUNT(*)                    AS total,
-                SUM(status = 'en_attente')  AS en_attente,
-                SUM(status = 'publie')      AS publie,
-                SUM(status = 'masque')      AS masque,
-                ROUND(AVG(rating), 1)       AS avg_rating
-            FROM testimonials
-        `);
-        const r = rows[0] || {};
+        const [total, en_attente, publie, masque, moyenne] = await Promise.all([
+            prisma.testimonial.count(),
+            prisma.testimonial.count({ where: { status: 'en_attente' } }),
+            prisma.testimonial.count({ where: { status: 'publie' } }),
+            prisma.testimonial.count({ where: { status: 'masque' } }),
+            prisma.testimonial.aggregate({ _avg: { rating: true } })
+        ]);
+
+        const avg = moyenne._avg.rating;
         return {
-            total: Number(r.total) || 0,
-            en_attente: Number(r.en_attente) || 0,
-            publie: Number(r.publie) || 0,
-            masque: Number(r.masque) || 0,
-            avgRating: Number(r.avg_rating) || 0
+            total, en_attente, publie, masque,
+            // ROUND(AVG(rating), 1) : une décimale, 0 si aucune note
+            avgRating: avg === null || avg === undefined ? 0 : Math.round(Number(avg) * 10) / 10
         };
     }
 
     static async getById(id) {
-        const [rows] = await pool.execute('SELECT * FROM testimonials WHERE id = ?', [Number(id)]);
-        if (!rows.length) return null;
-        return { ...rows[0], is_featured: !!rows[0].is_featured, keep_forever: !!rows[0].keep_forever };
+        return prisma.testimonial.findUnique({ where: { id: Number(id) } });
     }
 
     static async setStatus(id, status, adminId = null) {
-        await pool.execute(`
-            UPDATE testimonials
-            SET status = ?, moderated_at = CURRENT_TIMESTAMP, moderated_by = ?
-            WHERE id = ?
-        `, [status, adminId, Number(id)]);
-        return this.getById(id);
+        const existe = await prisma.testimonial.count({ where: { id: Number(id) } });
+        if (!existe) return null;
+
+        return prisma.testimonial.update({
+            where: { id: Number(id) },
+            data: { status, moderated_at: new Date(), moderated_by: adminId }
+        });
     }
 
     // Publie tous les témoignages en attente
     static async publishAllPending(adminId = null) {
-        const [r] = await pool.execute(`
-            UPDATE testimonials
-            SET status = 'publie', moderated_at = CURRENT_TIMESTAMP, moderated_by = ?
-            WHERE status = 'en_attente'
-        `, [adminId]);
-        return r.affectedRows;
+        const r = await prisma.testimonial.updateMany({
+            where: { status: 'en_attente' },
+            data: { status: 'publie', moderated_at: new Date(), moderated_by: adminId }
+        });
+        return r.count;
     }
 
     // Bascule mise en avant / conservation
     static async setFlag(id, field, value) {
         if (!['is_featured', 'keep_forever'].includes(field)) throw new Error('Champ non autorisé');
-        await pool.execute(`UPDATE testimonials SET ${field} = ? WHERE id = ?`, [value ? 1 : 0, Number(id)]);
-        return this.getById(id);
+        const existe = await prisma.testimonial.count({ where: { id: Number(id) } });
+        if (!existe) return null;
+
+        return prisma.testimonial.update({
+            where: { id: Number(id) },
+            data: { [field]: Boolean(value) }
+        });
     }
 
     static async delete(id) {
-        const [r] = await pool.execute('DELETE FROM testimonials WHERE id = ?', [Number(id)]);
-        return r.affectedRows > 0;
+        const r = await prisma.testimonial.deleteMany({ where: { id: Number(id) } });
+        return r.count > 0;
     }
 
     // Purge : ne touche ni aux conservés ni aux mis en avant
     static async deleteOld() {
-        const [result] = await pool.execute(`
-            DELETE FROM testimonials
-            WHERE created_at < DATE_SUB(NOW(), INTERVAL ${LIFE_MONTHS} MONTH)
-              AND keep_forever = FALSE
-              AND is_featured = FALSE
-        `);
-        return result.affectedRows;
+        const r = await prisma.testimonial.deleteMany({
+            where: {
+                created_at: { lt: dateLimite() },
+                keep_forever: false,
+                is_featured: false
+            }
+        });
+        return r.count;
     }
 }
 

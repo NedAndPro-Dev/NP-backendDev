@@ -1,5 +1,5 @@
 const Setting = require('../models/Setting');
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 
 const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 const DAY = 86400000;
@@ -32,7 +32,7 @@ const checkBookingRules = async ({ date_start, date_end, location_id, attendees 
     }
 
     // Jour de fermeture hebdomadaire
-    const [hours] = await pool.execute('SELECT weekday, is_open FROM business_hours');
+    const hours = await prisma.businessHour.findMany({ select: { weekday: true, is_open: true } });
     const closedDays = new Set(hours.filter(h => !h.is_open).map(h => h.weekday));
     for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
         if (closedDays.has(d.getDay())) {
@@ -41,12 +41,15 @@ const checkBookingRules = async ({ date_start, date_end, location_id, attendees 
     }
 
     // Fermeture exceptionnelle
-    const [clo] = await pool.execute(
-        'SELECT label FROM closures WHERE date_to >= ? AND date_from <= ? LIMIT 1',
-        [iso(start), iso(end)]
-    );
-    if (clo.length) {
-        return { ok: false, reason: 'closure', message: `Période indisponible : ${clo[0].label}.` };
+    const clo = await prisma.closure.findFirst({
+        where: {
+            date_to: { gte: new Date(`${iso(start)}T00:00:00Z`) },
+            date_from: { lte: new Date(`${iso(end)}T00:00:00Z`) }
+        },
+        select: { label: true }
+    });
+    if (clo) {
+        return { ok: false, reason: 'closure', message: `Période indisponible : ${clo.label}.` };
     }
 
     const waitlistOn = !!s.waitlist_enabled;
@@ -54,12 +57,20 @@ const checkBookingRules = async ({ date_start, date_end, location_id, attendees 
     // Chevauchement et battement (horaires.buffer_hours)
     if (location_id) {
         const bufferH = Number(s.buffer_hours) || 0;
-        const [rows] = await pool.execute(`
-            SELECT id, date_start, date_end FROM events
-            WHERE location_id = ? AND status <> 'Annulé' AND is_waitlisted = 0
-              AND date_end   >= DATE_SUB(?, INTERVAL ? HOUR)
-              AND date_start <= DATE_ADD(?, INTERVAL ? HOUR)
-        `, [location_id, start, bufferH, end, bufferH]);
+        // DATE_SUB/DATE_ADD(…, INTERVAL n HOUR) devient un décalage calculé
+        // ici : la fenêtre élargie du battement sert à repérer les voisins
+        // proches, le chevauchement réel est testé juste après.
+        const marge = bufferH * 3600000;
+        const rows = await prisma.event.findMany({
+            where: {
+                location_id: Number(location_id),
+                status: { not: 'Annulé' },
+                is_waitlisted: false,
+                date_end: { gte: new Date(start.getTime() - marge) },
+                date_start: { lte: new Date(end.getTime() + marge) }
+            },
+            select: { id: true, date_start: true, date_end: true }
+        });
 
         const overlap = rows.some(r => new Date(r.date_start) <= end && new Date(r.date_end) >= start);
         if (overlap && !s.allow_overlap) {
@@ -81,11 +92,20 @@ const checkBookingRules = async ({ date_start, date_end, location_id, attendees 
     // Quota journalier par salle
     const perDay = Number(s.max_bookings_per_day) || 0;
     if (perDay && location_id) {
-        const [[{ n }]] = await pool.execute(`
-            SELECT COUNT(*) AS n FROM events
-            WHERE location_id = ? AND status <> 'Annulé' AND is_waitlisted = 0 AND DATE(date_start) = ?
-        `, [location_id, iso(start)]);
-        if (Number(n) >= perDay) {
+        // DATE(date_start) = ? : toute la journée de la date demandée
+        const jour = iso(start);
+        const n = await prisma.event.count({
+            where: {
+                location_id: Number(location_id),
+                status: { not: 'Annulé' },
+                is_waitlisted: false,
+                date_start: {
+                    gte: new Date(`${jour}T00:00:00`),
+                    lte: new Date(`${jour}T23:59:59.999`)
+                }
+            }
+        });
+        if (n >= perDay) {
             return {
                 ok: false, reason: 'quota', waitlist: waitlistOn,
                 message: `Cette salle atteint déjà son maximum de ${perDay} réservation(s) ce jour-là.`
@@ -95,7 +115,10 @@ const checkBookingRules = async ({ date_start, date_end, location_id, attendees 
 
     // Capacité
     if (!s.allow_over_capacity && location_id && attendees) {
-        const [[loc]] = await pool.execute('SELECT capacity, name FROM locations WHERE id = ?', [location_id]);
+        const loc = await prisma.location.findUnique({
+            where: { id: Number(location_id) },
+            select: { capacity: true, name: true }
+        });
         if (loc && loc.capacity && Number(attendees) > Number(loc.capacity)) {
             return { ok: false, reason: 'capacity', message: `${loc.name} accueille au maximum ${loc.capacity} personnes.` };
         }

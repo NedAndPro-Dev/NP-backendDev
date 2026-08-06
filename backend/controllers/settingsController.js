@@ -1,6 +1,6 @@
 const path = require('path');
 const fs = require('fs');
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 const Setting = require('../models/Setting');
 const backup = require('../services/backupService');
 const {
@@ -11,21 +11,45 @@ const audit = require('../services/audit');
 
 const WEEKDAYS = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi'];
 
+/**
+ * PostgreSQL rend une colonne TIME sous forme d'objet Date ancré à l'époque,
+ * là où mysql2 rendait « 08:00:00 ». L'ancien code faisait
+ * String(open_at).slice(0, 5) : appliqué à un Date, cela donnerait « Mon J ».
+ */
+const heure = (t) => (t ? new Date(t).toISOString().slice(11, 16) : null);
+
+// ORDER BY FIELD(weekday,1,2,3,4,5,6,0) : la semaine commence lundi,
+// dimanche ferme la marche.
+const ORDRE_SEMAINE = [1, 2, 3, 4, 5, 6, 0];
+const parJourDeSemaine = (a, b) =>
+    ORDRE_SEMAINE.indexOf(a.weekday) - ORDRE_SEMAINE.indexOf(b.weekday);
+
 /* ─────────────── Lecture ─────────────── */
 
 // GET /api/settings — vue admin complète
 exports.getAll = async (req, res) => {
     try {
-        const [{ groups, lastUpdate }, [hours], [closures], [services], [templates]] = await Promise.all([
+        const [{ groups, lastUpdate }, hours, closures, services, templates, rows] = await Promise.all([
             Setting.grouped(),
-            pool.execute('SELECT weekday, is_open, open_at, close_at FROM business_hours ORDER BY FIELD(weekday,1,2,3,4,5,6,0)'),
-            pool.execute('SELECT id, label, date_from, date_to, kind FROM closures ORDER BY date_from'),
-            pool.execute('SELECT id, name, price, unit, is_active, sort_order FROM service_catalog ORDER BY sort_order, name'),
-            pool.execute('SELECT `key`, label, subject, is_active FROM email_templates')
+            prisma.businessHour.findMany(),
+            prisma.closure.findMany({
+                select: { id: true, label: true, date_from: true, date_to: true, kind: true },
+                orderBy: { date_from: 'asc' }
+            }),
+            prisma.serviceCatalog.findMany({
+                select: { id: true, name: true, price: true, unit: true, is_active: true, sort_order: true },
+                orderBy: [{ sort_order: 'asc' }, { name: 'asc' }]
+            }),
+            prisma.emailTemplate.findMany({
+                select: { key: true, label: true, subject: true, is_active: true }
+            }),
+            // Compteur d'usage réel des services, lu dans events.services (JSON)
+            prisma.event.findMany({
+                where: { status: { not: 'Annulé' } },
+                select: { services: true }
+            })
         ]);
 
-        // Compteur d'usage réel des services, lu dans events.services (JSON)
-        const [rows] = await pool.execute("SELECT services FROM events WHERE services IS NOT NULL AND status <> 'Annulé'");
         const usage = {};
         rows.forEach(r => {
             let list = r.services;
@@ -39,11 +63,11 @@ exports.getAll = async (req, res) => {
         res.json({
             groups,
             lastUpdate,
-            hours: hours.map(h => ({
+            hours: hours.sort(parJourDeSemaine).map(h => ({
                 weekday: h.weekday, name: WEEKDAYS[h.weekday],
                 is_open: !!h.is_open,
-                open_at: String(h.open_at).slice(0, 5),
-                close_at: String(h.close_at).slice(0, 5)
+                open_at: heure(h.open_at),
+                close_at: heure(h.close_at)
             })),
             closures: closures.map(c => ({
                 id: c.id, label: c.label, kind: c.kind,
@@ -65,12 +89,15 @@ exports.getAll = async (req, res) => {
 exports.getPublic = async (req, res) => {
     try {
         const s = await Setting.all();
-        const [services] = await pool.execute(
-            'SELECT name, price, unit FROM service_catalog WHERE is_active = 1 ORDER BY sort_order, name'
-        );
-        const [hours] = await pool.execute(
-            'SELECT weekday, is_open, open_at, close_at FROM business_hours ORDER BY FIELD(weekday,1,2,3,4,5,6,0)'
-        );
+        const [services, hoursRows] = await Promise.all([
+            prisma.serviceCatalog.findMany({
+                where: { is_active: true },
+                select: { name: true, price: true, unit: true },
+                orderBy: [{ sort_order: 'asc' }, { name: 'asc' }]
+            }),
+            prisma.businessHour.findMany()
+        ]);
+        const hours = hoursRows.sort(parJourDeSemaine);
 
         res.json({
             site: {
@@ -114,7 +141,7 @@ exports.getPublic = async (req, res) => {
             services: services.map(x => ({ name: x.name, price: Number(x.price), unit: x.unit })),
             hours: hours.map(h => ({
                 weekday: h.weekday, name: WEEKDAYS[h.weekday], is_open: !!h.is_open,
-                open_at: String(h.open_at).slice(0, 5), close_at: String(h.close_at).slice(0, 5)
+                open_at: heure(h.open_at), close_at: heure(h.close_at)
             }))
         });
     } catch (error) {
@@ -229,12 +256,24 @@ exports.resetGroup = async (req, res) => {
 exports.exportConfig = async (req, res) => {
     try {
         const { groups } = await Setting.grouped();     // secrets déjà masqués
-        const [[hours], [closures], [services], [templates]] = await Promise.all([
-            pool.execute('SELECT * FROM business_hours'),
-            pool.execute('SELECT label, date_from, date_to, kind FROM closures'),
-            pool.execute('SELECT name, price, unit, is_active, sort_order FROM service_catalog'),
-            pool.execute('SELECT `key`, label, subject, body, is_active FROM email_templates')
+        const [hoursRows, closures, services, templates] = await Promise.all([
+            prisma.businessHour.findMany(),
+            prisma.closure.findMany({ select: { label: true, date_from: true, date_to: true, kind: true } }),
+            prisma.serviceCatalog.findMany({
+                select: { name: true, price: true, unit: true, is_active: true, sort_order: true }
+            }),
+            prisma.emailTemplate.findMany({
+                select: { key: true, label: true, subject: true, body: true, is_active: true }
+            })
         ]);
+
+        // L'export doit rester réimportable : les heures repartent au format
+        // « HH:MM:SS » attendu par importConfig, pas en Date sérialisé.
+        const hours = hoursRows.sort(parJourDeSemaine).map(h => ({
+            ...h,
+            open_at: `${heure(h.open_at)}:00`,
+            close_at: `${heure(h.close_at)}:00`
+        }));
 
         const payload = {
             exported_at: new Date().toISOString(),
@@ -278,29 +317,37 @@ exports.uploadBranding = async (req, res) => {
 // PUT /api/settings/hours   body: [{ weekday, is_open, open_at, close_at }]
 exports.updateHours = async (req, res) => {
     const rows = Array.isArray(req.body) ? req.body : [];
-    const conn = await pool.getConnection();
     try {
-        await conn.beginTransaction();
+        // Validation d'abord, écriture ensuite : les horaires partent en une
+        // seule transaction, donc plus besoin d'annuler à mi-parcours comme
+        // le faisait le rollback.
+        const aEcrire = [];
         for (const h of rows) {
             const wd = Number(h.weekday);
             if (Number.isNaN(wd) || wd < 0 || wd > 6) continue;
             if (h.open_at >= h.close_at) {
-                await conn.rollback();
                 return res.status(422).json({ message: `${WEEKDAYS[wd]} : l'heure de fermeture doit suivre l'ouverture.` });
             }
-            await conn.execute(`
-                INSERT INTO business_hours (weekday, is_open, open_at, close_at)
-                VALUES (?, ?, ?, ?)
-                ON DUPLICATE KEY UPDATE is_open = VALUES(is_open), open_at = VALUES(open_at), close_at = VALUES(close_at)
-            `, [wd, h.is_open ? 1 : 0, h.open_at, h.close_at]);
+            aEcrire.push({
+                weekday: wd,
+                is_open: Boolean(h.is_open),
+                // « HH:MM » ou « HH:MM:SS » venant du formulaire → TIME
+                open_at: new Date(`1970-01-01T${String(h.open_at).slice(0, 8)}Z`),
+                close_at: new Date(`1970-01-01T${String(h.close_at).slice(0, 8)}Z`)
+            });
         }
-        await conn.commit();
+
+        await prisma.$transaction(aEcrire.map(h => prisma.businessHour.upsert({
+            where: { weekday: h.weekday },
+            update: { is_open: h.is_open, open_at: h.open_at, close_at: h.close_at },
+            create: h
+        })));
+
         res.json({ success: true, message: 'Horaires enregistrés' });
     } catch (error) {
-        await conn.rollback();
         console.error('Erreur updateHours:', error);
         res.status(500).json({ message: 'Erreur serveur' });
-    } finally { conn.release(); }
+    }
 };
 
 // POST /api/settings/closures
@@ -311,21 +358,30 @@ exports.addClosure = async (req, res) => {
         const to = date_to || date_from;
         if (to < date_from) return res.status(422).json({ message: 'La date de fin précède la date de début.' });
 
-        const [r] = await pool.execute(
-            'INSERT INTO closures (label, date_from, date_to, kind) VALUES (?, ?, ?, ?)',
-            [label, date_from, to, kind]
-        );
-
-        // Avertir si des dossiers existent déjà sur la période
-        const [[{ n }]] = await pool.execute(`
-            SELECT COUNT(*) AS n FROM events
-            WHERE status <> 'Annulé' AND DATE(date_end) >= ? AND DATE(date_start) <= ?
-        `, [date_from, to]);
+        const [created, n] = await Promise.all([
+            prisma.closure.create({
+                data: {
+                    label,
+                    date_from: new Date(`${date_from}T00:00:00Z`),
+                    date_to: new Date(`${to}T00:00:00Z`),
+                    kind
+                },
+                select: { id: true }
+            }),
+            // Avertir si des dossiers existent déjà sur la période
+            prisma.event.count({
+                where: {
+                    status: { not: 'Annulé' },
+                    date_end: { gte: new Date(`${date_from}T00:00:00`) },
+                    date_start: { lte: new Date(`${to}T23:59:59.999`) }
+                }
+            })
+        ]);
 
         res.status(201).json({
             success: true,
             message: n ? `Fermeture ajoutée — attention : ${n} dossier(s) déjà planifié(s) sur cette période` : 'Fermeture ajoutée',
-            data: { id: r.insertId, label, date_from, date_to: to, kind }
+            data: { id: created.id, label, date_from, date_to: to, kind }
         });
     } catch (error) {
         console.error('Erreur addClosure:', error);
@@ -336,8 +392,8 @@ exports.addClosure = async (req, res) => {
 // DELETE /api/settings/closures/:id
 exports.removeClosure = async (req, res) => {
     try {
-        const [r] = await pool.execute('DELETE FROM closures WHERE id = ?', [Number(req.params.id)]);
-        if (!r.affectedRows) return res.status(404).json({ message: 'Fermeture introuvable' });
+        const r = await prisma.closure.deleteMany({ where: { id: Number(req.params.id) } });
+        if (!r.count) return res.status(404).json({ message: 'Fermeture introuvable' });
         res.json({ success: true, message: 'Fermeture retirée' });
     } catch (error) {
         console.error('Erreur removeClosure:', error);
@@ -353,14 +409,20 @@ exports.addService = async (req, res) => {
         if (!name || String(name).trim().length < 2) {
             return res.status(422).json({ message: 'Nom du service obligatoire.' });
         }
-        const [[{ n }]] = await pool.execute('SELECT COALESCE(MAX(sort_order),0)+1 AS n FROM service_catalog');
-        const [r] = await pool.execute(
-            'INSERT INTO service_catalog (name, price, unit, sort_order) VALUES (?, ?, ?, ?)',
-            [String(name).trim(), Number(price) || 0, unit, n]
-        );
-        res.status(201).json({ success: true, message: 'Service ajouté', data: { id: r.insertId } });
+        const rang = await prisma.serviceCatalog.aggregate({ _max: { sort_order: true } });
+        const r = await prisma.serviceCatalog.create({
+            data: {
+                name: String(name).trim(),
+                price: Number(price) || 0,
+                unit,
+                sort_order: (rang._max.sort_order || 0) + 1
+            },
+            select: { id: true }
+        });
+        res.status(201).json({ success: true, message: 'Service ajouté', data: { id: r.id } });
     } catch (error) {
-        if (error.code === 'ER_DUP_ENTRY') {
+        // P2002 est l'équivalent Prisma de ER_DUP_ENTRY
+        if (error.code === 'P2002' || error.code === 'ER_DUP_ENTRY') {
             return res.status(409).json({ message: 'Un service porte déjà ce nom.' });
         }
         console.error('Erreur addService:', error);
@@ -371,19 +433,19 @@ exports.addService = async (req, res) => {
 exports.updateService = async (req, res) => {
     try {
         const { name, price, unit, is_active } = req.body;
-        const [r] = await pool.execute(`
-            UPDATE service_catalog
-            SET name = COALESCE(?, name), price = COALESCE(?, price),
-                unit = COALESCE(?, unit), is_active = COALESCE(?, is_active)
-            WHERE id = ?
-        `, [
-            name ?? null,
-            price === undefined ? null : Number(price),
-            unit ?? null,
-            is_active === undefined ? null : (is_active ? 1 : 0),
-            Number(req.params.id)
-        ]);
-        if (!r.affectedRows) return res.status(404).json({ message: 'Service introuvable' });
+        // COALESCE(?, colonne) : un champ absent du corps laisse la valeur
+        // en place. On ne met donc dans `data` que ce qui a été transmis.
+        const data = {};
+        if (name !== undefined && name !== null) data.name = name;
+        if (price !== undefined) data.price = Number(price);
+        if (unit !== undefined && unit !== null) data.unit = unit;
+        if (is_active !== undefined) data.is_active = Boolean(is_active);
+
+        const r = await prisma.serviceCatalog.updateMany({
+            where: { id: Number(req.params.id) },
+            data
+        });
+        if (!r.count) return res.status(404).json({ message: 'Service introuvable' });
         res.json({ success: true, message: 'Service mis à jour' });
     } catch (error) {
         console.error('Erreur updateService:', error);
@@ -394,23 +456,33 @@ exports.updateService = async (req, res) => {
 exports.removeService = async (req, res) => {
     try {
         const id = Number(req.params.id);
-        const [[svc]] = await pool.execute('SELECT name FROM service_catalog WHERE id = ?', [id]);
+        const svc = await prisma.serviceCatalog.findUnique({
+            where: { id }, select: { name: true }
+        });
         if (!svc) return res.status(404).json({ message: 'Service introuvable' });
 
-        // Un service déjà demandé est désactivé, pas supprimé : les dossiers y font référence
-        const [[{ n }]] = await pool.execute(
-            "SELECT COUNT(*) AS n FROM events WHERE services LIKE ? AND status <> 'Annulé'",
-            [`%${svc.name}%`]
-        );
-        if (Number(n) > 0) {
-            await pool.execute('UPDATE service_catalog SET is_active = 0 WHERE id = ?', [id]);
+        // Un service déjà demandé est désactivé, pas supprimé : les dossiers y
+        // font référence. L'ancien LIKE '%nom%' portait sur la colonne JSON
+        // sérialisée ; on compare désormais les entrées du tableau, ce qui
+        // évite au passage les faux positifs sur un nom contenu dans un autre.
+        const utilises = await prisma.event.findMany({
+            where: { status: { not: 'Annulé' } },
+            select: { services: true }
+        });
+        const n = utilises.filter(e => {
+            const list = Array.isArray(e.services) ? e.services : [];
+            return list.some(sv => String(sv).trim() === svc.name);
+        }).length;
+
+        if (n > 0) {
+            await prisma.serviceCatalog.update({ where: { id }, data: { is_active: false } });
             return res.json({
                 success: true,
                 message: `« ${svc.name} » est utilisé par ${n} dossier(s) : il a été désactivé plutôt que supprimé.`
             });
         }
 
-        await pool.execute('DELETE FROM service_catalog WHERE id = ?', [id]);
+        await prisma.serviceCatalog.delete({ where: { id } });
         res.json({ success: true, message: 'Service supprimé' });
     } catch (error) {
         console.error('Erreur removeService:', error);
@@ -422,9 +494,9 @@ exports.removeService = async (req, res) => {
 
 exports.getTemplate = async (req, res) => {
     try {
-        const [rows] = await pool.execute('SELECT * FROM email_templates WHERE `key` = ?', [req.params.key]);
-        if (!rows.length) return res.status(404).json({ message: 'Modèle introuvable' });
-        res.json({ ...rows[0], is_active: !!rows[0].is_active });
+        const tpl = await prisma.emailTemplate.findUnique({ where: { key: req.params.key } });
+        if (!tpl) return res.status(404).json({ message: 'Modèle introuvable' });
+        res.json({ ...tpl, is_active: !!tpl.is_active });
     } catch (error) {
         console.error('Erreur getTemplate:', error);
         res.status(500).json({ message: 'Erreur serveur' });
@@ -434,13 +506,17 @@ exports.getTemplate = async (req, res) => {
 exports.updateTemplate = async (req, res) => {
     try {
         const { subject, body, is_active } = req.body;
-        const [r] = await pool.execute(`
-            UPDATE email_templates
-            SET subject = COALESCE(?, subject), body = COALESCE(?, body),
-                is_active = COALESCE(?, is_active)
-            WHERE \`key\` = ?
-        `, [subject ?? null, body ?? null, is_active === undefined ? null : (is_active ? 1 : 0), req.params.key]);
-        if (!r.affectedRows) return res.status(404).json({ message: 'Modèle introuvable' });
+        // COALESCE(?, colonne) : seuls les champs transmis sont écrasés
+        const data = {};
+        if (subject !== undefined && subject !== null) data.subject = subject;
+        if (body !== undefined && body !== null) data.body = body;
+        if (is_active !== undefined) data.is_active = Boolean(is_active);
+
+        const r = await prisma.emailTemplate.updateMany({
+            where: { key: req.params.key },
+            data
+        });
+        if (!r.count) return res.status(404).json({ message: 'Modèle introuvable' });
         res.json({ success: true, message: 'Modèle enregistré' });
     } catch (error) {
         console.error('Erreur updateTemplate:', error);
@@ -591,12 +667,17 @@ exports.purgeCancelled = async (req, res) => {
 // GET /api/settings/maintenance-log
 exports.maintenanceLog = async (req, res) => {
     try {
-        const [rows] = await pool.execute(`
-            SELECT m.id, m.action, m.detail, m.status, m.created_at, u.name AS user_name
-            FROM maintenance_log m LEFT JOIN users u ON u.id = m.user_id
-            ORDER BY m.created_at DESC LIMIT 30
-        `);
-        res.json({ items: rows });
+        const rows = await prisma.maintenanceLog.findMany({
+            select: {
+                id: true, action: true, detail: true, status: true, created_at: true,
+                user: { select: { name: true } }
+            },
+            orderBy: { created_at: 'desc' },
+            take: 30
+        });
+        res.json({
+            items: rows.map(({ user, ...m }) => ({ ...m, user_name: user ? user.name : null }))
+        });
     } catch (error) {
         res.status(500).json({ message: 'Erreur serveur' });
     }

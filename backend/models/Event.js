@@ -1,4 +1,43 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
+
+/**
+ * Reproduit le CONCAT SQL qui composait `location_name` :
+ * « Site - Salle » pour une salle, « Site » seul pour un site racine.
+ */
+const nomLieu = (location) => {
+    if (!location) return null;
+    return location.parent ? `${location.parent.name} - ${location.name}` : location.name;
+};
+
+// La relation ne sert qu'à calculer location_name : elle est retirée de la
+// sortie, sinon la réponse JSON gagnerait un objet `location` que le
+// frontend ne connaît pas.
+const aplatir = (event, extra = {}) => {
+    const { location, ...reste } = event;
+    return { ...reste, location_name: nomLieu(location), ...extra };
+};
+
+const AVEC_LIEU = { location: { include: { parent: true } } };
+
+// Les services ont toujours été stockés en JSON, mais d'anciennes lignes
+// contiennent une chaîne simple : on conserve la tolérance d'origine.
+const normaliserServices = (valeur, id) => {
+    if (Array.isArray(valeur)) return valeur;
+    if (valeur === null || valeur === undefined) return [];
+    if (typeof valeur === 'string') {
+        if (!valeur.trim().startsWith('[')) {
+            console.warn(`⚠️ Services non-JSON pour événement ${id}: ${valeur}`);
+            return [valeur];
+        }
+        try {
+            return JSON.parse(valeur);
+        } catch (error) {
+            console.error(`❌ Erreur parsing services pour événement ${id}:`, error.message);
+            return [];
+        }
+    }
+    return [];
+};
 
 class Event {
     // Créer un événement
@@ -10,185 +49,119 @@ class Event {
             title
         } = eventData;
 
-        // S'assurer que services est un tableau
-        const servicesArray = Array.isArray(services) ? services : [];
+        const event = await prisma.event.create({
+            data: {
+                client_name: clientName,
+                title: title || null,
+                client_email: clientEmail,
+                client_phone: clientPhone,
+                company_name: companyName || null,
+                date_start: new Date(dateStart),
+                date_end: new Date(dateEnd),
+                location_id: Number(locationId),
+                // S'assurer que services est un tableau
+                services: Array.isArray(services) ? services : [],
+                payment_method: paymentMethod,
+                notes: notes || null,
+                conditions_accepted: Boolean(conditionsAccepted),
+                attendees: attendees ?? null,
+                status: status || 'En attente',
+                is_waitlisted: Boolean(isWaitlisted)
+            },
+            select: { id: true }
+        });
 
-        const [result] = await pool.execute(`
-            INSERT INTO events (
-                client_name, title, client_email, client_phone, company_name,
-                date_start, date_end, location_id, services,
-                payment_method, notes, conditions_accepted, attendees, status, is_waitlisted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            clientName, title || null, clientEmail, clientPhone, companyName || null,
-            dateStart, dateEnd, locationId, JSON.stringify(servicesArray),
-            paymentMethod, notes || null, conditionsAccepted ? 1 : 0,
-            attendees ?? null, status || 'En attente', isWaitlisted ? 1 : 0
-        ]);
-
-        return result.insertId;
+        return event.id;
     }
 
     // Récupérer tous les événements
     static async getAll() {
-        const query = `
-            SELECT 
-                e.*,
-                CONCAT(
-                    COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-                    IF(l.parent_id IS NOT NULL, ' - ', ''),
-                    l.name
-                ) as location_name
-            FROM events e
-            LEFT JOIN locations l ON e.location_id = l.id
-            ORDER BY e.date_start DESC
-        `;
-
-        const [rows] = await pool.execute(query);
-
-        // Parser les services JSON avec gestion d'erreurs ROBUSTE
-        return rows.map(event => {
-            let parsedServices = [];
-
-            try {
-                if (event.services && typeof event.services === 'string') {
-                    if (event.services.trim().startsWith('[')) {
-                        parsedServices = JSON.parse(event.services);
-                    } else {
-                        console.warn(`⚠️ Services non-JSON pour événement ${event.id}: ${event.services}`);
-                        parsedServices = [event.services];
-                    }
-                } else if (Array.isArray(event.services)) {
-                    parsedServices = event.services;
-                }
-            } catch (error) {
-                console.error(`❌ Erreur parsing services pour événement ${event.id}:`, error.message);
-                console.error(`   Données brutes: ${event.services}`);
-                parsedServices = [];
-            }
-
-            return {
-                ...event,
-                services: parsedServices
-            };
+        const rows = await prisma.event.findMany({
+            include: AVEC_LIEU,
+            orderBy: { date_start: 'desc' }
         });
+        return rows.map(e => aplatir(e, { services: normaliserServices(e.services, e.id) }));
     }
 
     // Récupérer les événements publics (pour le calendrier)
     // Projection sans donnée identifiante : ni nom du client, ni email, ni téléphone.
     static async getPublicEvents() {
-        const query = `
-            SELECT 
-                e.id,
-                e.date_start,
-                e.date_end,
-                e.status,
-                CONCAT(
-                    COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-                    IF(l.parent_id IS NOT NULL, ' - ', ''),
-                    l.name
-                ) as location_name
-            FROM events e
-            LEFT JOIN locations l ON e.location_id = l.id
-            WHERE e.status != 'Annulé'
-            ORDER BY e.date_start ASC
-        `;
-
-        const [rows] = await pool.execute(query);
-        return rows;
+        const rows = await prisma.event.findMany({
+            where: { status: { not: 'Annulé' } },
+            select: {
+                id: true, date_start: true, date_end: true, status: true,
+                location: { include: { parent: true } }
+            },
+            orderBy: { date_start: 'asc' }
+        });
+        return rows.map(e => aplatir(e));
     }
 
     // Récupérer un événement par ID
     static async getById(id) {
-        const query = `
-            SELECT 
-                e.*,
-                CONCAT(
-                    COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-                    IF(l.parent_id IS NOT NULL, ' - ', ''),
-                    l.name
-                ) as location_name
-            FROM events e
-            LEFT JOIN locations l ON e.location_id = l.id
-            WHERE e.id = ?
-        `;
-
-        const [rows] = await pool.execute(query, [id]);
-
-        if (rows.length === 0) return null;
-
-        let parsedServices = [];
-        try {
-            if (rows[0].services && typeof rows[0].services === 'string') {
-                if (rows[0].services.trim().startsWith('[')) {
-                    parsedServices = JSON.parse(rows[0].services);
-                } else {
-                    parsedServices = [rows[0].services];
-                }
-            }
-        } catch (error) {
-            console.error(`Erreur parsing services pour événement ${id}:`, error);
-            parsedServices = [];
-        }
-
-        return {
-            ...rows[0],
-            services: parsedServices
-        };
+        const event = await prisma.event.findUnique({
+            where: { id: Number(id) },
+            include: AVEC_LIEU
+        });
+        if (!event) return null;
+        return aplatir(event, { services: normaliserServices(event.services, event.id) });
     }
 
     // Mettre à jour le statut. Confirmer une demande la sort de la liste d'attente.
     static async updateStatus(id, status, { clearWaitlist = false } = {}) {
-        const [result] = await pool.execute(
-            clearWaitlist
-                ? 'UPDATE events SET status = ?, is_waitlisted = 0 WHERE id = ?'
-                : 'UPDATE events SET status = ? WHERE id = ?',
-            [status, id]
-        );
-        return result.affectedRows > 0;
+        const r = await prisma.event.updateMany({
+            where: { id: Number(id) },
+            data: { status, ...(clearWaitlist ? { is_waitlisted: false } : {}) }
+        });
+        return r.count > 0;
     }
 
     // Supprimer un événement
     static async delete(id) {
-        const query = 'DELETE FROM events WHERE id = ?';
-        const [result] = await pool.execute(query, [id]);
-        return result.affectedRows > 0;
+        const r = await prisma.event.deleteMany({ where: { id: Number(id) } });
+        return r.count > 0;
     }
 
     // Salles rendues indisponibles par un événement CONFIRMÉ chevauchant la plage
     static async getUnavailableLocations(from, to) {
-        const [rows] = await pool.execute(`
-            SELECT DISTINCT location_id
-            FROM events
-            WHERE status = 'Confirmé'
-              AND is_waitlisted = 0
-              AND date_start < ?
-              AND date_end   > ?
-        `, [to, from]);
+        const rows = await prisma.event.findMany({
+            where: {
+                status: 'Confirmé',
+                is_waitlisted: false,
+                date_start: { lt: new Date(to) },
+                date_end: { gt: new Date(from) }
+            },
+            select: { location_id: true },
+            distinct: ['location_id']
+        });
         return rows.map(r => r.location_id);
     }
 
     // Événements d'une plage de dates, pour le calendrier admin
     static async getForCalendar(from, to) {
-        const query = `
-            SELECT
-                e.id, e.client_name, e.client_email, e.date_start, e.date_end,
-                e.status, e.services,
-                CONCAT(
-                    COALESCE((SELECT name FROM locations WHERE id = l.parent_id), ''),
-                    IF(l.parent_id IS NOT NULL, ' - ', ''),
-                    l.name
-                ) AS location_name,
-                l.capacity AS location_capacity
-            FROM events e
-            LEFT JOIN locations l ON e.location_id = l.id
-            WHERE e.status <> 'Annulé'
-              AND DATE(e.date_end)   >= ?
-              AND DATE(e.date_start) <= ?
-            ORDER BY e.date_start ASC
-        `;
-        const [rows] = await pool.execute(query, [from, to]);
-        return rows.map(r => ({ ...r, services: undefined }));
+        // Le SQL comparait DATE(date_end) >= from et DATE(date_start) <= to,
+        // donc à la journée entière : on borne aux extrémités des journées.
+        const debut = new Date(`${from}T00:00:00`);
+        const fin = new Date(`${to}T23:59:59.999`);
+
+        const rows = await prisma.event.findMany({
+            where: {
+                status: { not: 'Annulé' },
+                date_end: { gte: debut },
+                date_start: { lte: fin }
+            },
+            select: {
+                id: true, client_name: true, client_email: true,
+                date_start: true, date_end: true, status: true,
+                location: { include: { parent: true } }
+            },
+            orderBy: { date_start: 'asc' }
+        });
+
+        return rows.map(e => ({
+            ...aplatir(e),
+            location_capacity: e.location ? e.location.capacity : null
+        }));
     }
 }
 

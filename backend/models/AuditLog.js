@@ -1,6 +1,19 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 
 const CATEGORIES = ['param', 'resa', 'moder', 'systeme', 'email', 'acces', 'contenu', 'users'];
+const STATUSES = ['succes', 'echec', 'attention'];
+
+/**
+ * Équivalent de DATE_SUB(CURDATE(), INTERVAL n DAY) : minuit, il y a n jours.
+ * Le seuil part bien du début de journée, sinon une fenêtre « 7 jours »
+ * glisserait au fil des heures et le total changerait à chaque appel.
+ */
+const depuisNJours = (n) => {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - n);
+    return d;
+};
 
 class AuditLog {
     static get CATEGORIES() { return CATEGORIES; }
@@ -12,110 +25,117 @@ class AuditLog {
             ip = null, userAgent = null, method = null, path = null, httpStatus = null
         } = entry;
 
-        const [r] = await pool.execute(`
-            INSERT INTO audit_log
-                (category, action, target, detail, status, changes, user_id,
-                 actor_name, actor_email, actor_role, ip, user_agent, method, path, http_status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `, [
-            CATEGORIES.includes(category) ? category : 'systeme',
-            String(action).slice(0, 120),
-            target ? String(target).slice(0, 190) : null,
-            detail ? String(detail).slice(0, 500) : null,
-            ['succes', 'echec', 'attention'].includes(status) ? status : 'succes',
-            changes && changes.length ? JSON.stringify(changes) : null,
-            userId, actorName, actorEmail, actorRole,
-            ip ? String(ip).slice(0, 64) : null,
-            userAgent ? String(userAgent).slice(0, 255) : null,
-            method, path ? String(path).slice(0, 190) : null, httpStatus
-        ]);
-        return r.insertId;
+        const r = await prisma.auditLog.create({
+            data: {
+                category: CATEGORIES.includes(category) ? category : 'systeme',
+                action: String(action).slice(0, 120),
+                target: target ? String(target).slice(0, 190) : null,
+                detail: detail ? String(detail).slice(0, 500) : null,
+                status: STATUSES.includes(status) ? status : 'succes',
+                changes: changes && changes.length ? changes : null,
+                user_id: userId,
+                actor_name: actorName,
+                actor_email: actorEmail,
+                actor_role: actorRole,
+                ip: ip ? String(ip).slice(0, 64) : null,
+                user_agent: userAgent ? String(userAgent).slice(0, 255) : null,
+                method,
+                path: path ? String(path).slice(0, 190) : null,
+                http_status: httpStatus
+            },
+            select: { id: true }
+        });
+        return r.id;
     }
 
     // Liste filtrée + paginée
     static async list({ category = 'all', status = 'all', userId = null, q = '', days = 7, limit = 60, offset = 0 } = {}) {
-        const where = [];
-        const params = [];
-
         const d = Math.min(365, Math.max(1, parseInt(days, 10) || 7));
-        where.push('a.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)');
-        params.push(d - 1);
 
-        if (CATEGORIES.includes(category)) { where.push('a.category = ?'); params.push(category); }
-        if (['succes', 'echec', 'attention'].includes(status)) { where.push('a.status = ?'); params.push(status); }
-        if (userId) { where.push('a.user_id = ?'); params.push(Number(userId)); }
+        const where = { created_at: { gte: depuisNJours(d - 1) } };
+        if (CATEGORIES.includes(category)) where.category = category;
+        if (STATUSES.includes(status)) where.status = status;
+        if (userId) where.user_id = Number(userId);
         if (q) {
-            where.push('(a.action LIKE ? OR a.target LIKE ? OR a.detail LIKE ? OR a.actor_name LIKE ? OR a.actor_email LIKE ?)');
-            const like = `%${q}%`;
-            params.push(like, like, like, like, like);
+            const contains = { contains: q, mode: 'insensitive' };
+            where.OR = [
+                { action: contains }, { target: contains }, { detail: contains },
+                { actor_name: contains }, { actor_email: contains }
+            ];
         }
 
-        // LIMIT/OFFSET jamais en placeholders : MySQL renvoie ER_WRONG_ARGUMENTS
         const lim = Math.min(300, Math.max(1, parseInt(limit, 10) || 60));
         const off = Math.max(0, parseInt(offset, 10) || 0);
-        const clause = 'WHERE ' + where.join(' AND ');
 
-        const [rows] = await pool.execute(`
-            SELECT a.*, u.name AS current_name
-            FROM audit_log a LEFT JOIN users u ON u.id = a.user_id
-            ${clause}
-            ORDER BY a.created_at DESC, a.id DESC
-            LIMIT ${lim} OFFSET ${off}
-        `, params);
-
-        const [[{ n }]] = await pool.execute(`SELECT COUNT(*) AS n FROM audit_log a ${clause}`, params);
+        const [rows, total] = await Promise.all([
+            prisma.auditLog.findMany({
+                where,
+                include: { user: { select: { name: true } } },
+                orderBy: [{ created_at: 'desc' }, { id: 'desc' }],
+                take: lim,
+                skip: off
+            }),
+            prisma.auditLog.count({ where })
+        ]);
 
         return {
-            items: rows.map(r => ({
+            items: rows.map(({ user, ...r }) => ({
                 ...r,
-                changes: typeof r.changes === 'string' ? JSON.parse(r.changes || 'null') : r.changes,
-                actor_name: r.actor_name || r.current_name || 'Compte supprimé'
+                current_name: user ? user.name : null,
+                // actor_name est figé à l'écriture ; on retombe sur le nom
+                // actuel du compte, puis sur une mention explicite.
+                actor_name: r.actor_name || (user && user.name) || 'Compte supprimé'
             })),
-            total: Number(n),
-            hasMore: off + rows.length < Number(n)
+            total,
+            hasMore: off + rows.length < total
         };
     }
 
     static async stats(days = 7) {
         const d = Math.min(365, Math.max(1, parseInt(days, 10) || 7));
-        const [[row]] = await pool.execute(`
-            SELECT COUNT(*) AS total,
-                   COUNT(DISTINCT COALESCE(a.user_id, a.actor_email)) AS actors,
-                   SUM(a.status = 'echec')     AS echecs,
-                   SUM(a.status = 'attention') AS sensibles
-            FROM audit_log a
-            WHERE a.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
-        `, [d - 1]);
+        const where = { created_at: { gte: depuisNJours(d - 1) } };
 
-        const [byCat] = await pool.execute(`
-            SELECT category, COUNT(*) AS n FROM audit_log
-            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY)
-            GROUP BY category
-        `, [d - 1]);
+        const [total, echecs, sensibles, parCategorie, lignes] = await Promise.all([
+            prisma.auditLog.count({ where }),
+            prisma.auditLog.count({ where: { ...where, status: 'echec' } }),
+            prisma.auditLog.count({ where: { ...where, status: 'attention' } }),
+            prisma.auditLog.groupBy({ by: ['category'], where, _count: { _all: true } }),
+            prisma.auditLog.findMany({
+                where, select: { user_id: true, actor_email: true, actor_name: true }
+            })
+        ]);
 
-        const [actors] = await pool.execute(`
-            SELECT a.user_id, MAX(a.actor_name) AS name, COUNT(*) AS n
-            FROM audit_log a
-            WHERE a.created_at >= DATE_SUB(CURDATE(), INTERVAL ? DAY) AND a.user_id IS NOT NULL
-            GROUP BY a.user_id ORDER BY n DESC
-        `, [d - 1]);
+        // COUNT(DISTINCT COALESCE(user_id, actor_email)) : un acteur est
+        // identifié par son compte, ou à défaut par son email — ce qui
+        // compte aussi les actions système et les connexions refusées.
+        const acteurs = new Set(
+            lignes.map(r => (r.user_id !== null ? `u:${r.user_id}` : `e:${r.actor_email || ''}`))
+        );
+
+        // Regroupement par compte, nom le plus « grand » comme le faisait MAX()
+        const parCompte = new Map();
+        lignes.filter(r => r.user_id !== null).forEach(r => {
+            const cur = parCompte.get(r.user_id) || { id: r.user_id, name: null, count: 0 };
+            cur.count += 1;
+            if (r.actor_name && (cur.name === null || r.actor_name > cur.name)) cur.name = r.actor_name;
+            parCompte.set(r.user_id, cur);
+        });
 
         return {
-            total: Number(row.total) || 0,
-            actors: Number(row.actors) || 0,
-            echecs: Number(row.echecs) || 0,
-            sensibles: Number(row.sensibles) || 0,
-            byCategory: byCat.reduce((acc, r) => ({ ...acc, [r.category]: Number(r.n) }), {}),
-            actorList: actors.map(a => ({ id: a.user_id, name: a.name, count: Number(a.n) }))
+            total,
+            actors: acteurs.size,
+            echecs,
+            sensibles,
+            byCategory: parCategorie.reduce((acc, r) => ({ ...acc, [r.category]: r._count._all }), {}),
+            actorList: [...parCompte.values()].sort((a, b) => b.count - a.count)
         };
     }
 
     static async purge(days) {
         const d = Math.min(3650, Math.max(7, parseInt(days, 10) || 90));
-        const [r] = await pool.execute(
-            'DELETE FROM audit_log WHERE created_at < DATE_SUB(NOW(), INTERVAL ? DAY)', [d]
-        );
-        return r.affectedRows;
+        const limite = new Date(Date.now() - d * 86400000);
+        const r = await prisma.auditLog.deleteMany({ where: { created_at: { lt: limite } } });
+        return r.count;
     }
 }
 

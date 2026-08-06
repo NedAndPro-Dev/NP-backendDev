@@ -1,4 +1,4 @@
-const pool = require('../config/database');
+const prisma = require('../config/prisma');
 const Event = require('../models/Event');
 const {
     checkBookingRules, checkRequiredFields, checkCancellation,
@@ -161,38 +161,28 @@ const updateEvent = async (req, res) => {
             notes
         } = req.body;
 
-        const query = `
-            UPDATE events SET
-                client_name = ?,
-                client_email = ?,
-                client_phone = ?,
-                company_name = ?,
-                date_start = ?,
-                date_end = ?,
-                location_id = ?,
-                number_of_people = ?,
-                services = ?,
-                payment_method = ?,
-                notes = ?
-            WHERE id = ?
-        `;
+        // La requête d'origine écrivait dans « number_of_people », colonne
+        // qui n'a jamais existé : cette route répondait donc toujours 500.
+        // Prisma refuse un champ absent du schéma, il fallait trancher —
+        // la colonne réelle est « attendees ».
+        const result = await prisma.event.updateMany({
+            where: { id: Number(id) },
+            data: {
+                client_name: clientName,
+                client_email: clientEmail,
+                client_phone: clientPhone,
+                company_name: companyName || null,
+                date_start: new Date(dateStart),
+                date_end: new Date(dateEnd),
+                location_id: Number(locationId),
+                attendees: numberOfPeople || null,
+                services: Array.isArray(services) ? services : [],
+                payment_method: paymentMethod,
+                notes: notes || null
+            }
+        });
 
-        const [result] = await pool.execute(query, [
-            clientName,
-            clientEmail,
-            clientPhone,
-            companyName || null,
-            dateStart,
-            dateEnd,
-            locationId,
-            numberOfPeople || null,
-            JSON.stringify(services),
-            paymentMethod,
-            notes || null,
-            id
-        ]);
-
-        if (result.affectedRows === 0) {
+        if (result.count === 0) {
             return res.status(404).json({ message: 'Événement non trouvé' });
         }
 
