@@ -13,4 +13,9 @@ router.post('/change-password', authMiddleware, authController.changePassword);
 // Vérifier token (protégé)
 router.get('/verify', authMiddleware, authController.verifyToken);
 
+// Réinitialisation par code à 6 chiffres (mot de passe oublié / expiré)
+router.post('/password/request-code', loginLimiter, authController.requestResetCode);
+router.post('/password/verify-code', authController.verifyResetCode);
+router.post('/password/reset', authController.resetPassword);
+
 module.exports = router;

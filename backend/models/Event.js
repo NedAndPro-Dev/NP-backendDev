@@ -6,7 +6,8 @@ class Event {
         const {
             clientName, clientEmail, clientPhone, companyName,
             dateStart, dateEnd, locationId, services, paymentMethod,
-            notes, conditionsAccepted, attendees, status, isWaitlisted
+            notes, conditionsAccepted, attendees, status, isWaitlisted,
+            title
         } = eventData;
 
         // S'assurer que services est un tableau
@@ -14,12 +15,12 @@ class Event {
 
         const [result] = await pool.execute(`
             INSERT INTO events (
-                client_name, client_email, client_phone, company_name,
+                client_name, title, client_email, client_phone, company_name,
                 date_start, date_end, location_id, services,
                 payment_method, notes, conditions_accepted, attendees, status, is_waitlisted
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `, [
-            clientName, clientEmail, clientPhone, companyName || null,
+            clientName, title || null, clientEmail, clientPhone, companyName || null,
             dateStart, dateEnd, locationId, JSON.stringify(servicesArray),
             paymentMethod, notes || null, conditionsAccepted ? 1 : 0,
             attendees ?? null, status || 'En attente', isWaitlisted ? 1 : 0
@@ -152,6 +153,19 @@ class Event {
         const query = 'DELETE FROM events WHERE id = ?';
         const [result] = await pool.execute(query, [id]);
         return result.affectedRows > 0;
+    }
+
+    // Salles rendues indisponibles par un événement CONFIRMÉ chevauchant la plage
+    static async getUnavailableLocations(from, to) {
+        const [rows] = await pool.execute(`
+            SELECT DISTINCT location_id
+            FROM events
+            WHERE status = 'Confirmé'
+              AND is_waitlisted = 0
+              AND date_start < ?
+              AND date_end   > ?
+        `, [to, from]);
+        return rows.map(r => r.location_id);
     }
 
     // Événements d'une plage de dates, pour le calendrier admin

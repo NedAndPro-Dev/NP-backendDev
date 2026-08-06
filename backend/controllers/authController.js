@@ -1,6 +1,8 @@
 const jwt = require("jsonwebtoken");
 const User = require("../models/User");
 const audit = require("../services/audit");
+const PasswordResetCode = require("../models/PasswordResetCode");
+const { sendRaw } = require("../utils/mailer");
 
 // Connexion admin
 exports.login = async (req, res) => {
@@ -61,7 +63,7 @@ exports.login = async (req, res) => {
       return res.status(403).json({
         success: false,
         passwordExpired: true,
-        message: "Votre mot de passe a expiré. Veuillez le changer.",
+        message: "Votre mot de passe a expiré. Veuillez le réinitialiser.",
       });
     }
 
@@ -110,7 +112,7 @@ exports.login = async (req, res) => {
   }
 };
 
-// Changer le mot de passe
+// Changer le mot de passe (connecté)
 exports.changePassword = async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -194,5 +196,137 @@ exports.verifyToken = async (req, res) => {
       success: false,
       message: "Erreur serveur",
     });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────
+// Réinitialisation par code à 6 chiffres
+// (mot de passe oublié ET mot de passe expiré à la connexion)
+// Réutilise sendRaw (mailer.js) et User.updatePassword existants.
+// ─────────────────────────────────────────────────────────────
+
+// Étape 1 : demander un code
+exports.requestResetCode = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: "Email requis" });
+    }
+
+    const user = await User.findByEmail(email);
+
+    // On n'agit que si le compte existe et est actif, mais la réponse reste identique
+    if (user && user.is_active) {
+      const code = await PasswordResetCode.create(email);
+      try {
+        await sendRaw({
+          to: email,
+          subject: "Votre code de vérification",
+          title: "Code de vérification",
+          subtitle: "Réinitialisation du mot de passe",
+          html: `
+            <p style="margin:0 0 16px;color:#64748b">Voici votre code pour réinitialiser votre mot de passe :</p>
+            <div style="font-size:34px;font-weight:800;letter-spacing:10px;text-align:center;color:#0f1b33;background:#eef2ff;border-radius:12px;padding:18px">${code}</div>
+            <p style="margin:16px 0 0;color:#94a3b8;font-size:13px">Ce code expire dans 10 minutes. Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.</p>
+          `,
+        });
+      } catch (mailError) {
+        console.error("Envoi code échoué:", mailError.message);
+        return res.status(500).json({
+          success: false,
+          message: "Impossible d'envoyer l'email. Réessayez plus tard.",
+        });
+      }
+    }
+
+    return res.json({
+      success: true,
+      message: "Si un compte existe pour cette adresse, un code vient d'être envoyé.",
+    });
+  } catch (error) {
+    console.error("Erreur requestResetCode:", error);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// Étape 2 : vérifier le code → jeton de réinitialisation court
+exports.verifyResetCode = async (req, res) => {
+  try {
+    const { email, code } = req.body;
+
+    if (!email || !code) {
+      return res.status(400).json({ success: false, message: "Email et code requis" });
+    }
+
+    const result = await PasswordResetCode.verify(email, String(code).trim());
+
+    if (!result.ok) {
+      const message =
+        result.reason === "expired" ? "Code expiré. Demandez-en un nouveau."
+        : result.reason === "locked" ? "Trop de tentatives. Demandez un nouveau code."
+        : "Code incorrect.";
+      return res.status(400).json({ success: false, message });
+    }
+
+    await PasswordResetCode.markUsed(result.id);
+
+    const resetToken = jwt.sign(
+      { email, purpose: "password_reset" },
+      process.env.JWT_SECRET,
+      { expiresIn: "15m" },
+    );
+
+    return res.json({ success: true, resetToken });
+  } catch (error) {
+    console.error("Erreur verifyResetCode:", error);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+};
+
+// Étape 3 : définir le nouveau mot de passe avec le jeton de réinitialisation
+exports.resetPassword = async (req, res) => {
+  try {
+    const { resetToken, newPassword } = req.body;
+
+    if (!resetToken || !newPassword) {
+      return res.status(400).json({ success: false, message: "Jeton et nouveau mot de passe requis" });
+    }
+
+    if (newPassword.length < 8) {
+      return res.status(400).json({
+        success: false,
+        message: "Le nouveau mot de passe doit contenir au moins 8 caractères",
+      });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(resetToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({
+        success: false,
+        message: "Session de réinitialisation expirée. Recommencez.",
+      });
+    }
+
+    if (payload.purpose !== "password_reset" || !payload.email) {
+      return res.status(401).json({ success: false, message: "Jeton invalide" });
+    }
+
+    const user = await User.findByEmail(payload.email);
+    if (!user) {
+      return res.status(404).json({ success: false, message: "Compte introuvable" });
+    }
+
+    await User.updatePassword(payload.email, newPassword);
+
+    res.json({
+      success: true,
+      message: "Mot de passe réinitialisé. Nouvelle expiration : 3 mois.",
+    });
+  } catch (error) {
+    console.error("Erreur resetPassword:", error);
+    res.status(500).json({ success: false, message: "Erreur serveur" });
   }
 };

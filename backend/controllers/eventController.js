@@ -112,6 +112,21 @@ const getPublicEvents = async (req, res) => {
     }
 };
 
+// GET /events/availability?from=<ISO>&to=<ISO>  (public)
+const getAvailability = async (req, res) => {
+    try {
+        const { from, to } = req.query;
+        if (!from || !to) {
+            return res.status(400).json({ success: false, message: 'Paramètres from et to requis' });
+        }
+        const unavailable = await Event.getUnavailableLocations(from, to);
+        res.json({ unavailable });
+    } catch (error) {
+        console.error('Erreur disponibilité:', error);
+        res.status(500).json({ success: false, message: 'Erreur serveur' });
+    }
+};
+
 // Récupérer un événement par ID
 const getEventById = async (req, res) => {
     try {
@@ -264,6 +279,7 @@ module.exports = {
     createEvent,
     getAllEvents,
     getPublicEvents,
+    getAvailability,
     getEventById,
     updateEvent,
     updateEventStatus,

@@ -7,6 +7,9 @@ const authMiddleware = require('../middleware/authMiddleware');
 // Calendrier page d'accueil (visiteurs)
 router.get('/public', eventController.getPublicEvents);
 
+// Salles occupées sur une plage — avant /:id, sinon « availability » serait lu comme un id
+router.get('/availability', eventController.getAvailability);
+
 // Créer un événement depuis le formulaire Planifier (visiteurs)
 router.post('/', eventController.createEvent);
 
